@@ -1,0 +1,269 @@
+"""
+src/retrieval/hybrid_search.py
+────────────────────────────────
+Hybrid Search: menggabungkan BM25 (sparse) + Dense (vector) retrieval.
+
+Mengapa Hybrid Search?
+───────────────────────
+Dense-only (vektor):
+✓ Bagus menangkap makna semantik ("pinjaman darurat" ≈ "kredit mendesak")
+✗ Lemah untuk exact match: angka, kode regulasi ("POJK 35/POJK.05/2018"),
+  nama spesifik, akronim
+
+BM25-only (sparse):
+✓ Sangat baik untuk exact keyword, angka, kode
+✗ Tidak memahami sinonim, parafrase, atau makna kontekstual
+
+Hybrid (kita):
+✓ Mendapat keuntungan keduanya via Reciprocal Rank Fusion (RRF)
+✗ Sedikit lebih lambat, sedikit lebih kompleks
+
+Implementasi:
+- BM25 murni di Python (rank-bm25) untuk in-memory kandidat
+- Dense search via pgvector di Supabase
+- RRF di database (sudah ada di fungsi hybrid_search SQL)
+- Sebagai lapisan tambahan: BM25 Python digunakan untuk re-score
+  kandidat yang sudah diambil dari DB
+
+Catatan arsitektur:
+Fungsi SQL hybrid_search sudah melakukan RRF di DB level.
+Modul ini menambahkan BM25 Python sebagai lapisan kedua yang lebih akurat
+(PostgreSQL FTS ≠ BM25 murni; rank_bm25 library lebih akurat).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from langchain_core.documents import Document
+from langchain_openai import OpenAIEmbeddings
+from loguru import logger
+from rank_bm25 import BM25Okapi
+from supabase import Client, create_client
+
+from config.settings import get_settings
+
+settings = get_settings()
+
+
+@dataclass
+class HybridSearchResult:
+    """one document result of hybrid search with combined score."""
+    document: Document
+    dense_score: float       
+    bm25_score: float        
+    hybrid_score: float      
+    child_id: str
+    parent_id: str
+
+
+def _tokenize(text: str) -> list[str]:
+    """
+    Simple tokenizer for BM25.
+    For Indonesian text, we use split by whitespace + lowercase.
+
+    For better production: use sastrawi (Bahasa Indonesia stemmer)
+    or nltk with Indonesian stopwords.
+    """
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text) 
+
+    stopwords_id = {
+        "dan", "atau", "yang", "di", "ke", "dari", "untuk", "pada",
+        "dengan", "adalah", "ini", "itu", "dalam", "tidak", "akan",
+        "bisa", "ada", "juga", "sudah", "saya", "apa", "bagaimana",
+        "tersebut", "oleh", "sebagai", "telah", "dapat", "secara",
+        "serta", "bahwa", "maupun", "antara", "setiap", "sesuai",
+    }
+
+    tokens = text.split()
+    tokens = [t for t in tokens if t not in stopwords_id and len(t) > 1]
+    return tokens
+
+
+def _reciprocal_rank_fusion(
+    dense_results: list[tuple[str, float]],    
+    bm25_results: list[tuple[str, float]],     
+    k: int = 60,
+    dense_weight: float | None = None,
+    bm25_weight: float | None = None,
+) -> dict[str, float]:
+    """
+    Reciprocal Rank Fusion (RRF)
+    """
+    w_dense = dense_weight or settings.dense_weight
+    w_bm25 = bm25_weight or settings.bm25_weight
+
+    scores: dict[str, float] = {}
+
+    for rank, (doc_id, _) in enumerate(dense_results, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + w_dense / (k + rank)
+
+    for rank, (doc_id, _) in enumerate(bm25_results, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + w_bm25 / (k + rank)
+
+    return scores
+
+
+class HybridSearcher:
+    """
+    Orchestrator for hybrid BM25 + Dense search.
+    """
+
+    def __init__(self, supabase_client: Client | None = None):
+        self._supabase = supabase_client or create_client(
+            settings.supabase_url, settings.supabase_service_key
+        )
+        self._embedder = OpenAIEmbeddings(
+            model=settings.embedding_model,
+            api_key=settings.open_api_key,
+        )
+
+        # BM25 index di-build dari cache lokal dokumen yang sudah diambil
+        # (Untuk produksi: pre-build dari semua child chunks saat startup)
+        self._bm25_corpus: list[str] = []
+        self._bm25_doc_ids: list[str] = []
+        self._bm25_index: BM25Okapi | None = None
+
+    def _build_bm25_index(self, documents: list[dict]) -> None:
+        """
+        Build BM25 index from documents list.
+        Called after dense search to re-rank candidates.
+        """
+        self._bm25_corpus = [doc["content"] for doc in documents]
+        self._bm25_doc_ids = [doc["id"] for doc in documents]
+
+        tokenized_corpus = [_tokenize(text) for text in self._bm25_corpus]
+
+        self._bm25_index = BM25Okapi(tokenized_corpus)
+
+    def search(
+        self,
+        query: str,
+        filters: dict[str, str] | None = None,
+        top_k: int | None = None,
+    ) -> list[HybridSearchResult]:
+        """
+        Run hybrid search: dense → BM25 re-scoring → RRF.
+        """
+        k = top_k or settings.retrieval_top_k
+        filters = filters or {}
+
+        logger.info(f"Hybrid search: '{query}' | filters: {filters} | top_k: {k}")
+
+        query_embedding = self._embedder.embed_query(query)
+
+        rpc_params: dict[str, Any] = {
+            "query_embedding": query_embedding,
+            "query_text": query,
+            "match_count": k * 2,
+            "fts_weight": settings.bm25_weight,
+            "vector_weight": settings.dense_weight,
+            "rrf_k": 60,
+            "filter_section": filters.get("section"),
+        }
+
+        response = self._supabase.rpc("hybrid_search", rpc_params).execute()
+
+        if not response.data:
+            logger.warning("there is no result from hybrid_search RPC")
+
+            # Fallback to dense-only search
+            logger.info("Fallback to dense-only search via match_child_documents...")
+            fallback_response = self._supabase.rpc(
+                "match_child_documents",
+                {
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.0,
+                    "match_count": k,
+                    "filter_section": filters.get("section"),
+                },
+            ).execute()
+
+            if not fallback_response.data:
+                logger.warning("Dense search also empty")
+                return []
+
+            # Convert fallback results to the same format
+            db_results = []
+            for row in fallback_response.data:
+                row["rrf_score"] = row.get("similarity", 0.0)
+                db_results.append(row)
+        else:
+            db_results = response.data
+
+        self._build_bm25_index(db_results)
+
+        query_tokens = _tokenize(query)
+        bm25_scores_raw = self._bm25_index.get_scores(query_tokens)
+
+        max_bm25 = float(np.max(bm25_scores_raw)) if np.max(bm25_scores_raw) > 0 else 1.0
+        bm25_scores_normalized = bm25_scores_raw / max_bm25
+
+        dense_ranked = [
+            (row["id"], row.get("rrf_score", 0.0)) for row in db_results
+        ]
+
+        bm25_ranked = sorted(
+            [
+                (self._bm25_doc_ids[i], float(score))
+                for i, score in enumerate(bm25_scores_normalized)
+            ],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+        final_scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked)
+
+        db_lookup = {row["id"]: row for row in db_results}
+        bm25_lookup = {
+            self._bm25_doc_ids[i]: float(score)
+            for i, score in enumerate(bm25_scores_normalized)
+        }
+
+        results: list[HybridSearchResult] = []
+
+        for doc_id, hybrid_score in sorted(
+            final_scores.items(), key=lambda x: x[1], reverse=True
+        )[:k]:
+            if doc_id not in db_lookup:
+                continue
+
+            row = db_lookup[doc_id]
+
+            doc = Document(
+                page_content=row["content"],
+                metadata={
+                    "child_id": row["id"],
+                    "parent_id": row.get("parent_id", ""),
+                    "title": row.get("title", ""),
+                    "section": row.get("section", ""),
+                    "pages": row.get("pages", []),
+                    "source": row.get("source", ""),
+                },
+            )
+
+            results.append(
+                HybridSearchResult(
+                    document=doc,
+                    dense_score=row.get("rrf_score", 0.0),
+                    bm25_score=bm25_lookup.get(doc_id, 0.0),
+                    hybrid_score=hybrid_score,
+                    child_id=row["id"],
+                    parent_id=row.get("parent_id", ""),
+                )
+            )
+
+        logger.info(f"Hybrid search done: {len(results)} results")
+        if results:
+            logger.info(
+                f"  Top: {results[0].child_id} | "
+                f"hybrid={results[0].hybrid_score:.4f} | "
+                f"dense={results[0].dense_score:.4f} | "
+                f"bm25={results[0].bm25_score:.4f}"
+            )
+
+        return results
