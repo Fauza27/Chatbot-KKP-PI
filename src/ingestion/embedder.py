@@ -39,6 +39,7 @@ def get_openai_embeddings(
         response = client.embeddings.create(
             model=model,
             input=batch,
+            dimensions=2000,
         )
 
         batch_embeddings = [item.embedding for item in response.data]
