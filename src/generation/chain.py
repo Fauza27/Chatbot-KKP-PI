@@ -5,9 +5,9 @@ from typing import Iterator
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI
 from loguru import logger
+from operator import itemgetter
 
 from config.settings import get_settings
 
@@ -197,7 +197,7 @@ def build_rag_chain(streaming: bool = False):
     chain = (
         {
             "context": lambda x: _format_context(x["context"]),
-            "question": RunnablePassthrough() | (lambda x: x["question"]),
+            "question": itemgetter("question"),
         }
         | prompt
         | llm
