@@ -2,8 +2,8 @@ import pdfplumber
 import sys
 import os
 
-PDF_PATH = r"c:\Users\Muhammad Fauza\penelitian-ilmiah\Panduan Penyusunan Penulisan Imliah (PI) Cetak.pdf"
-OUTPUT_PATH = r"c:\Users\Muhammad Fauza\penelitian-ilmiah\hasil_ekstrak_panduan_pi.txt"
+PDF_PATH = r"C:\Users\Muhammad Fauza\penelitian-ilmiah\extract-pdf\Panduan Penyusunan Kuliah Kerja Praktik (KKP) Cetak.pdf"
+OUTPUT_PATH = r"c:\Users\Muhammad Fauza\penelitian-ilmiah\hasil_ekstrak_panduan_kkp.txt"
 
 def extract_text():
     all_text = []
