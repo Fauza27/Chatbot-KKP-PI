@@ -73,7 +73,7 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
         - metadata: Dict detail setiap tahap pipeline
     """
     from src.retrieval.self_query import extract_query_components
-    from src.retrieval.hybird_search import HybridSearcher
+    from src.retrieval.hybrid_search import HybridSearcher
     from src.retrieval.parent_child import ParentChildFetcher
     from src.retrieval.reranker import CrossEncoderReranker
     from src.generation.chain import generate_answer
