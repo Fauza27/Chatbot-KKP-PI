@@ -267,18 +267,27 @@ def run_ingest(dataset: str = "both"):
 
 
 # ── Mode: Evaluasi ────────────────────────────────────────────
-def run_eval():
-    """Jalankan evaluasi RAGAS pada pipeline RAG."""
-    from src.evaluation.ragas_eval import run_evaluation
+def run_eval(dataset: str = "pi"):
+    from src.evaluation.ragas_eval import (
+        run_evaluation,
+        EVAL_QUESTIONS_PI,
+        EVAL_QUESTIONS_KKP,
+    )
+
+    dataset_map = {
+        "pi": EVAL_QUESTIONS_PI,
+        "kkp": EVAL_QUESTIONS_KKP,
+        "both": EVAL_QUESTIONS_PI + EVAL_QUESTIONS_KKP,
+    }
+
+    eval_data = dataset_map.get(dataset, EVAL_QUESTIONS_PI)
+    logger.info(f"Evaluasi dataset: {dataset.upper()} ({len(eval_data)} pertanyaan)")
 
     def pipeline_fn(question: str) -> dict:
         result = run_rag_pipeline(question, debug=False)
-        return {
-            "answer": result["answer"],
-            "contexts": result["contexts"],
-        }
+        return {"answer": result["answer"], "contexts": result["contexts"]}
 
-    scores = run_evaluation(pipeline_fn=pipeline_fn)
+    scores = run_evaluation(pipeline_fn=pipeline_fn, eval_data=eval_data)
     logger.info(f"Evaluation scores: {scores}")
 
 
@@ -417,7 +426,7 @@ Contoh penggunaan:
     if args.ingest:
         run_ingest(args.dataset)
     elif args.evaluate:
-        run_eval()
+        run_eval(dataset=args.dataset)  
     elif args.question:
         result = run_rag_pipeline(args.question, debug=args.debug)
         print("\n" + "─" * 60)
