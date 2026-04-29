@@ -78,6 +78,7 @@ class HybridSearcher:
         self._embedder = OpenAIEmbeddings(
             model=settings.embedding_model,
             api_key=settings.open_api_key,
+            dimmensions=2000,
         )
         self._bm25_corpus: list[str] = []
         self._bm25_doc_ids: list[str] = []
@@ -155,33 +156,38 @@ class HybridSearcher:
             db_results = response.data
 
         bm25_built = self._build_bm25_index(db_results)
-
         query_tokens = _tokenize(query)
 
         if bm25_built and self._bm25_index is not None:
             bm25_scores_raw = self._bm25_index.get_scores(query_tokens)
             max_bm25 = float(np.max(bm25_scores_raw)) if np.max(bm25_scores_raw) > 0 else 1.0
             bm25_scores_normalized = bm25_scores_raw / max_bm25
+
+            bm25_ranked = sorted(
+                [
+                    (self._bm25_doc_ids[i], float(score))
+                    for i, score in enumerate(bm25_scores_normalized)
+                ],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            bm25_lookup = {
+                self._bm25_doc_ids[i]: float(score)
+                for i, score in enumerate(bm25_scores_normalized)
+            }
         else:
-            # Fallback: semua BM25 score = 0
-            bm25_scores_normalized = np.zeros(len(db_results))
+            # BM25 tidak tersedia, fallback ke dense-only RRF
+            logger.warning("BM25 index tidak tersedia, menggunakan dense score saja.")
+            bm25_ranked = []
+            bm25_lookup = {}
 
         dense_ranked = [
             (row["id"], row.get("rrf_score", 0.0)) for row in db_results
         ]
 
-        bm25_ranked = sorted(
-            [
-                (self._bm25_doc_ids[i], float(score))
-                for i, score in enumerate(bm25_scores_normalized)
-            ],
-            key=lambda x: x[1],
-            reverse=True,
-        )
-
         final_scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked)
-
         db_lookup = {row["id"]: row for row in db_results}
+        
         bm25_lookup = {
             self._bm25_doc_ids[i]: float(score)
             for i, score in enumerate(bm25_scores_normalized)
