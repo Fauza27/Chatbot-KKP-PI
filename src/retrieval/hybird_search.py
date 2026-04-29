@@ -1,36 +1,3 @@
-"""
-src/retrieval/hybrid_search.py
-────────────────────────────────
-Hybrid Search: menggabungkan BM25 (sparse) + Dense (vector) retrieval.
-
-Mengapa Hybrid Search?
-───────────────────────
-Dense-only (vektor):
-✓ Bagus menangkap makna semantik ("pinjaman darurat" ≈ "kredit mendesak")
-✗ Lemah untuk exact match: angka, kode regulasi ("POJK 35/POJK.05/2018"),
-  nama spesifik, akronim
-
-BM25-only (sparse):
-✓ Sangat baik untuk exact keyword, angka, kode
-✗ Tidak memahami sinonim, parafrase, atau makna kontekstual
-
-Hybrid (kita):
-✓ Mendapat keuntungan keduanya via Reciprocal Rank Fusion (RRF)
-✗ Sedikit lebih lambat, sedikit lebih kompleks
-
-Implementasi:
-- BM25 murni di Python (rank-bm25) untuk in-memory kandidat
-- Dense search via pgvector di Supabase
-- RRF di database (sudah ada di fungsi hybrid_search SQL)
-- Sebagai lapisan tambahan: BM25 Python digunakan untuk re-score
-  kandidat yang sudah diambil dari DB
-
-Catatan arsitektur:
-Fungsi SQL hybrid_search sudah melakukan RRF di DB level.
-Modul ini menambahkan BM25 Python sebagai lapisan kedua yang lebih akurat
-(PostgreSQL FTS ≠ BM25 murni; rank_bm25 library lebih akurat).
-"""
-
 from __future__ import annotations
 
 import re

@@ -1,18 +1,3 @@
-"""
-Mengubah child chunks menjadi vektor embedding dan menyimpan semuanya
-(parent chunks + child chunks + embeddings) ke Supabase.
- 
-Tanggung jawab:
-1. Batch embedding via OpenAI API
-2. Upsert parent chunks ke tabel parent_chunks
-3. Upsert child chunks + vektor ke tabel child_chunks
-4. Idempotent: dokumen yang sudah ada tidak di-embed ulang
- 
-Mengapa hanya child chunks yang di-embed?
-Parent chunk terlalu panjang → embedding-nya "encer" (kurang spesifik).
-Hanya child chunk yang masuk database vektor karena retrieval dilakukan
-berdasarkan child; parent diambil setelahnya via foreign key.
-"""
 import time
 from openai import OpenAI
 from supabase import create_client, Client
