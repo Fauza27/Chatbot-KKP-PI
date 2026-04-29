@@ -137,7 +137,7 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
         return {
             "answer": (
                 "Maaf, saya tidak menemukan informasi yang relevan "
-                "dalam panduan PI. Silakan coba pertanyaan lain atau "
+                "dalam panduan KKP/PI. Silakan coba pertanyaan lain atau "
                 "konsultasikan dengan Dosen Pembimbing."
             ),
             "contexts": [],
@@ -229,29 +229,41 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
 
 
 # ── Mode: Ingestion ──────────────────────────────────────────
-def run_ingest():
+def run_ingest(dataset: str = "both"):
     """Jalankan pipeline ingestion: load JSON → embed → upsert ke Supabase."""
     from src.ingestion.embedder import run_ingestion
 
-    # Path ke file chunks
     project_root = Path(__file__).resolve().parent
-    child_path = project_root / "extract-pdf" / "child_chunk.json"
-    parent_path = project_root / "extract-pdf" / "parent_chunk.json"
+    dataset_map = {
+        "pi": ("child_chunk_pi.json", "parent_chunk_pi.json"),
+        "kkp": ("child_chunk_kkp.json", "parent_chunk_kkp.json"),
+    }
 
-    if not child_path.exists():
-        logger.error(f"File tidak ditemukan: {child_path}")
-        sys.exit(1)
-    if not parent_path.exists():
-        logger.error(f"File tidak ditemukan: {parent_path}")
-        sys.exit(1)
+    def ingest_one(name: str) -> None:
+        child_file, parent_file = dataset_map[name]
+        child_path = project_root / "extract-pdf" / child_file
+        parent_path = project_root / "extract-pdf" / parent_file
 
-    stats = run_ingestion(
-        child_chunks_path=str(child_path),
-        parent_chunks_path=str(parent_path),
-    )
+        if not child_path.exists():
+            logger.error(f"File tidak ditemukan: {child_path}")
+            sys.exit(1)
+        if not parent_path.exists():
+            logger.error(f"File tidak ditemukan: {parent_path}")
+            sys.exit(1)
 
-    logger.info("Ingestion selesai!")
-    logger.info(f"Stats: {stats}")
+        stats = run_ingestion(
+            child_chunks_path=str(child_path),
+            parent_chunks_path=str(parent_path),
+        )
+
+        logger.info(f"Ingestion selesai untuk {name.upper()}!")
+        logger.info(f"Stats: {stats}")
+
+    if dataset == "both":
+        for name in ("pi", "kkp"):
+            ingest_one(name)
+    else:
+        ingest_one(dataset)
 
 
 # ── Mode: Evaluasi ────────────────────────────────────────────
@@ -274,7 +286,7 @@ def run_eval():
 def run_interactive(debug: bool = False):
     """Loop tanya-jawab interaktif."""
     print("\n" + "=" * 60)
-    print("🎓 Chatbot Panduan Penulisan Ilmiah (PI)")
+    print("🎓 Chatbot Panduan KKP/PI")
     print("   STMIK Widya Cipta Dharma")
     print("=" * 60)
     print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
@@ -343,13 +355,15 @@ def run_interactive(debug: bool = False):
 # ── Main ──────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="RAG Chatbot - Panduan Penulisan Ilmiah (PI)",
+        description="RAG Chatbot - Panduan KKP/PI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Contoh penggunaan:
   python main.py                                    # mode interaktif
   python main.py --question "Apa syarat PI?"        # single question
-  python main.py --ingest                           # ingest data ke Supabase
+    python main.py --ingest --dataset both            # ingest data KKP + PI
+    python main.py --ingest --dataset pi              # ingest data PI
+    python main.py --ingest --dataset kkp             # ingest data KKP
   python main.py --evaluate                         # evaluasi dengan RAGAS
   python main.py --debug --question "..."           # debug mode
         """,
@@ -364,6 +378,12 @@ Contoh penggunaan:
         "--ingest",
         action="store_true",
         help="Jalankan ingestion: embed + upload data ke Supabase",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["pi", "kkp", "both"],
+        default="both",
+        help="Dataset ingestion: pi, kkp, atau both",
     )
     parser.add_argument(
         "--evaluate",
@@ -395,7 +415,7 @@ Contoh penggunaan:
 
     # Route ke mode yang dipilih
     if args.ingest:
-        run_ingest()
+        run_ingest(args.dataset)
     elif args.evaluate:
         run_eval()
     elif args.question:
