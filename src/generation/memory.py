@@ -1,3 +1,4 @@
+# src/generation/memory.py
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -49,7 +50,10 @@ class ConversationMemory:
         retrieved_doc_contents: list[str] | None = None,
     ) -> None:
         """add assistant turn to history"""
-        self._turns.append(Turn(role="assistant", content=content, retrieved_doc_contents=retrieved_doc_contents or [],
+        self._turns.append(Turn(
+            role="assistant",
+            content=content,
+            retrieved_doc_contents=retrieved_doc_contents or [],
         ))
         self._enforce_window()
     
@@ -61,11 +65,11 @@ class ConversationMemory:
     
     def get_history_for_llm(self) -> list[dict]:
         """
-        turn back the conversation history in a format suitable for LLM input, which is a list of messages with role and content.
+        turn back the conversation history in a format suitable for LLM input.
+        Excludes the last message (current user turn belum dijawab).
         """
         if len(self._turns) <= 1:
             return []
-        
         return [t.to_lc_message() for t in self._turns[:-1]]
     
     def get_last_retrieved_docs(self) -> list[str]:
@@ -89,7 +93,7 @@ class ConversationMemory:
             lines.append(f"{prefix}: {content}")
         return "\n".join(lines)
         
-    def get_last_question(self) -> str:
+    def get_last_question(self) -> str | None:  
         """get the last user question"""
         for turn in reversed(self._turns):
             if turn.role == "user":

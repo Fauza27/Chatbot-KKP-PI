@@ -1,5 +1,4 @@
 import json
-from functools import lru_cache
  
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -76,9 +75,9 @@ class IntentClassifier:
     def __init__(self):
         self._llm = ChatOpenAI(
             model=settings.llm_model,
-            temperature=0,          
-            openai_api_key=settings.openai_api_key,
-            max_tokens=150,          
+            temperature=0,
+            api_key=settings.open_api_key,  
+            max_tokens=150,
         )
         self._cache: dict[str, IntentType] = {}
  
@@ -116,7 +115,6 @@ class IntentClassifier:
             ])
  
             raw = response.content.strip()
- 
             raw = raw.replace("```json", "").replace("```", "").strip()
  
             parsed = json.loads(raw)
@@ -144,7 +142,7 @@ class IntentClassifier:
             logger.warning(f"Classifier error: {e} → fallback NEEDS_RETRIEVAL")
             return IntentType.NEEDS_RETRIEVAL, 0.5, f"Fallback karena error: {e}"
 
- 
+
 _REFORMULATION_PROMPT = """Anda membantu sistem pencarian dokumen internal.
  
 Riwayat percakapan:
@@ -170,7 +168,7 @@ def reformulate_query(
     write again query for standalone use.
     """
     if memory.is_empty:
-        return message  
+        return message
  
     implicit_refs = [
         "itu", "tersebut", "tadi", "yang itu", "hal itu",
@@ -181,13 +179,13 @@ def reformulate_query(
     has_implicit = any(ref in message.lower() for ref in implicit_refs)
  
     if not has_implicit:
-        return message 
+        return message
  
     if llm is None:
         llm = ChatOpenAI(
             model=settings.llm_model,
             temperature=0,
-            openai_api_key=settings.openai_api_key,
+            api_key=settings.open_api_key,  
             max_tokens=100,
         )
  
