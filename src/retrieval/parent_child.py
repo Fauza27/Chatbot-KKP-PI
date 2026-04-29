@@ -6,7 +6,7 @@ from loguru import logger
 from config.settings import get_settings
 
 # Import tipe dari hybrid search
-from src.retrieval.hybird_search import HybridSearchResult
+from src.retrieval.hybrid_search import HybridSearchResult
 
 
 class ParentChildFetcher:

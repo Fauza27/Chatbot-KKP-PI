@@ -13,15 +13,11 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-
-# ── Deskripsi atribut metadata yang bisa difilter ───────────────────────────
-# Ini yang LLM gunakan untuk "memahami" field apa saja yang tersedia.
-# Semakin detail deskripsi → semakin akurat filter yang dihasilkan.
 METADATA_FIELD_INFO = [
     AttributeInfo(
         name="section",
         description=(
-            "Bagian/bab dari dokumen Panduan PI. Nilai yang valid: "
+            "Bagian/bab dari dokumen Panduan PI atau KKP. Nilai yang valid: "
             "'Front Matter' (kata pengantar, daftar isi/tabel/gambar), "
             "'Surat Keputusan' (SK pemberlakuan panduan), "
             "'BAB I' (pendahuluan: latar belakang, tujuan panduan), "
@@ -51,21 +47,25 @@ METADATA_FIELD_INFO = [
         name="source",
         description=(
             "Nama file sumber dokumen. Nilai yang mungkin: "
-            "'cleaned_extracted_text.txt' atau "
-            "'Panduan Penyusunan Penulisan Imliah (PI) Cetak.md'"
+            "'Panduan Penyusunan Penulisan Imliah (PI) Cetak' untuk dokumen PI, "
+            "'Panduan Penyusunan Kuliah Kerja Praktik (KKP) Cetak' untuk dokumen KKP."
         ),
         type="string",
     ),
 ]
 
-# Deskripsi koleksi dokumen — konteks untuk LLM saat generate filter
 DOCUMENT_CONTENT_DESCRIPTION = (
-    "Dokumen panduan penyusunan Penulisan Ilmiah (PI) dari STMIK Widya Cipta Dharma, "
-    "mencakup: ketentuan umum (syarat, dosen pembimbing/penguji, prosedur), "
-    "sistematika penulisan laporan (BAB I-V), format dan tata cara penulisan "
-    "(kertas, margin, huruf, spasi, tabel, gambar, bahasa, daftar pustaka), "
-    "sistem penilaian dan kelulusan, serta contoh format dan formulir (lampiran)."
+    "Dokumen panduan akademik dari STMIK Widya Cipta Dharma yang terdiri dari dua jenis: "
+    "(1) Panduan Penulisan Ilmiah (PI) — mencakup ketentuan umum, sistematika laporan PI, "
+    "format penulisan, sistem penilaian, dan contoh formulir untuk PI; "
+    "(2) Panduan Kuliah Kerja Praktik (KKP) — mencakup ketentuan umum KKP, "
+    "sistematika laporan KKP, prosedur pengajuan dan ujian KKP, "
+    "sistem penilaian KKP, dan contoh formulir untuk KKP. "
+    "Keduanya membahas: dosen pembimbing/penguji, syarat mahasiswa (SKS, IPK), "
+    "prosedur pengajuan, pelaksanaan, pendaftaran ujian, penilaian, kelulusan, "
+    "format penulisan (margin, huruf, spasi, daftar pustaka APA), dan lampiran formulir."
 )
+
 
 
 @dataclass
@@ -134,19 +134,7 @@ def build_self_query_retriever(
 
 def extract_query_components(query: str, llm: ChatOpenAI | None = None) -> ParsedQuery:
     """
-    Utilitas: ekstrak semantic query dan filter dari query user.
-    Berguna untuk debugging dan logging.
-
-    Ini menganalisis query secara heuristik berdasarkan keyword
-    untuk melihat mapping section yang tepat, tanpa menjalankan
-    retrieval penuh.
-
-    Args:
-        query: Query natural language dari user
-        llm: ChatOpenAI instance (opsional, untuk future use)
-
-    Returns:
-        ParsedQuery dengan komponen yang terpisah
+    ekstrak semantic query dan filter dari query user.
     """
     logger.debug(f"Menganalisis query: '{query}'")
 
@@ -160,10 +148,11 @@ def extract_query_components(query: str, llm: ChatOpenAI | None = None) -> Parse
         ],
         "BAB II": [
             "dosen pembimbing", "dosen penguji", "syarat", "ketentuan",
-            "prosedur", "ujian pi", "penilaian", "kelulusan", "nilai",
-            "bimbingan", "sks", "ipk", "plagiarisme", "seminar",
+            "prosedur", "ujian pi", "ujian kkp", "penilaian", "kelulusan",
+            "nilai", "bimbingan", "sks", "ipk", "plagiarisme", "seminar",
             "pendaftaran", "penggantian dosen", "masa bimbingan",
-            "tempat penelitian", "pengajuan judul",
+            "tempat penelitian", "tempat kkp", "pengajuan judul",
+            "kriteria tempat", "durasi kkp", "lama kkp", "hari kerja",
         ],
         "BAB III": [
             "sistematika penulisan", "gambaran umum laporan",
@@ -175,6 +164,8 @@ def extract_query_components(query: str, llm: ChatOpenAI | None = None) -> Parse
             "kajian empiris", "landasan teori", "metode penelitian",
             "hasil penelitian", "pembahasan", "kesimpulan", "saran",
             "latar belakang masalah",
+            "narasi kegiatan", "deskripsi kegiatan", "analisis hasil kegiatan",
+            "sejarah tempat kkp", "profil tempat",
         ],
         "BAB V": [
             "format", "margin", "huruf", "spasi", "kertas", "font",
@@ -186,7 +177,7 @@ def extract_query_components(query: str, llm: ChatOpenAI | None = None) -> Parse
             "contoh", "lampiran", "sampul", "cover", "pengesahan",
             "abstrak", "kata pengantar", "daftar isi", "jadwal",
             "wawancara", "form", "formulir", "berita acara",
-            "rekapitulasi", "surat tugas",
+            "rekapitulasi", "surat tugas", "daftar hadir",
         ],
     }
 
