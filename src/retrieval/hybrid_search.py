@@ -1,3 +1,4 @@
+# src/retrieval/hybrid_search.py  (nama file diperbaiki: hybird → hybrid)
 from __future__ import annotations
 
 import re
@@ -20,23 +21,17 @@ settings = get_settings()
 class HybridSearchResult:
     """one document result of hybrid search with combined score."""
     document: Document
-    dense_score: float       
-    bm25_score: float        
-    hybrid_score: float      
+    dense_score: float
+    bm25_score: float
+    hybrid_score: float
     child_id: str
     parent_id: str
 
 
 def _tokenize(text: str) -> list[str]:
-    """
-    Simple tokenizer for BM25.
-    For Indonesian text, we use split by whitespace + lowercase.
-
-    For better production: use sastrawi (Bahasa Indonesia stemmer)
-    or nltk with Indonesian stopwords.
-    """
+    """Simple tokenizer for BM25 (Indonesian text)."""
     text = text.lower()
-    text = re.sub(r"[^\w\s]", " ", text) 
+    text = re.sub(r"[^\w\s]", " ", text)
 
     stopwords_id = {
         "dan", "atau", "yang", "di", "ke", "dari", "untuk", "pada",
@@ -52,15 +47,13 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _reciprocal_rank_fusion(
-    dense_results: list[tuple[str, float]],    
-    bm25_results: list[tuple[str, float]],     
+    dense_results: list[tuple[str, float]],
+    bm25_results: list[tuple[str, float]],
     k: int = 60,
     dense_weight: float | None = None,
     bm25_weight: float | None = None,
 ) -> dict[str, float]:
-    """
-    Reciprocal Rank Fusion (RRF)
-    """
+    """Reciprocal Rank Fusion (RRF)"""
     w_dense = dense_weight or settings.dense_weight
     w_bm25 = bm25_weight or settings.bm25_weight
 
@@ -76,9 +69,7 @@ def _reciprocal_rank_fusion(
 
 
 class HybridSearcher:
-    """
-    Orchestrator for hybrid BM25 + Dense search.
-    """
+    """Orchestrator for hybrid BM25 + Dense search."""
 
     def __init__(self, supabase_client: Client | None = None):
         self._supabase = supabase_client or create_client(
@@ -88,24 +79,30 @@ class HybridSearcher:
             model=settings.embedding_model,
             api_key=settings.open_api_key,
         )
-
-        # BM25 index di-build dari cache lokal dokumen yang sudah diambil
-        # (Untuk produksi: pre-build dari semua child chunks saat startup)
         self._bm25_corpus: list[str] = []
         self._bm25_doc_ids: list[str] = []
         self._bm25_index: BM25Okapi | None = None
 
-    def _build_bm25_index(self, documents: list[dict]) -> None:
+    def _build_bm25_index(self, documents: list[dict]) -> bool:
         """
         Build BM25 index from documents list.
-        Called after dense search to re-rank candidates.
+
+        Returns:
+            True jika index berhasil dibangun, False jika documents kosong.
         """
+        if not documents:
+            logger.warning("BM25 index tidak dibangun: documents kosong.")
+            self._bm25_corpus = []
+            self._bm25_doc_ids = []
+            self._bm25_index = None
+            return False
+
         self._bm25_corpus = [doc["content"] for doc in documents]
         self._bm25_doc_ids = [doc["id"] for doc in documents]
 
         tokenized_corpus = [_tokenize(text) for text in self._bm25_corpus]
-
         self._bm25_index = BM25Okapi(tokenized_corpus)
+        return True
 
     def search(
         self,
@@ -113,9 +110,7 @@ class HybridSearcher:
         filters: dict[str, str] | None = None,
         top_k: int | None = None,
     ) -> list[HybridSearchResult]:
-        """
-        Run hybrid search: dense → BM25 re-scoring → RRF.
-        """
+        """Run hybrid search: dense → BM25 re-scoring → RRF."""
         k = top_k or settings.retrieval_top_k
         filters = filters or {}
 
@@ -136,10 +131,8 @@ class HybridSearcher:
         response = self._supabase.rpc("hybrid_search", rpc_params).execute()
 
         if not response.data:
-            logger.warning("there is no result from hybrid_search RPC")
-
-            # Fallback to dense-only search
-            logger.info("Fallback to dense-only search via match_child_documents...")
+            logger.warning("Tidak ada hasil dari hybrid_search RPC.")
+            logger.info("Fallback ke dense-only via match_child_documents...")
             fallback_response = self._supabase.rpc(
                 "match_child_documents",
                 {
@@ -151,10 +144,9 @@ class HybridSearcher:
             ).execute()
 
             if not fallback_response.data:
-                logger.warning("Dense search also empty")
+                logger.warning("Dense search juga kosong, tidak ada hasil.")
                 return []
 
-            # Convert fallback results to the same format
             db_results = []
             for row in fallback_response.data:
                 row["rrf_score"] = row.get("similarity", 0.0)
@@ -162,13 +154,17 @@ class HybridSearcher:
         else:
             db_results = response.data
 
-        self._build_bm25_index(db_results)
+        bm25_built = self._build_bm25_index(db_results)
 
         query_tokens = _tokenize(query)
-        bm25_scores_raw = self._bm25_index.get_scores(query_tokens)
 
-        max_bm25 = float(np.max(bm25_scores_raw)) if np.max(bm25_scores_raw) > 0 else 1.0
-        bm25_scores_normalized = bm25_scores_raw / max_bm25
+        if bm25_built and self._bm25_index is not None:
+            bm25_scores_raw = self._bm25_index.get_scores(query_tokens)
+            max_bm25 = float(np.max(bm25_scores_raw)) if np.max(bm25_scores_raw) > 0 else 1.0
+            bm25_scores_normalized = bm25_scores_raw / max_bm25
+        else:
+            # Fallback: semua BM25 score = 0
+            bm25_scores_normalized = np.zeros(len(db_results))
 
         dense_ranked = [
             (row["id"], row.get("rrf_score", 0.0)) for row in db_results
@@ -224,7 +220,7 @@ class HybridSearcher:
                 )
             )
 
-        logger.info(f"Hybrid search done: {len(results)} results")
+        logger.info(f"Hybrid search selesai: {len(results)} results")
         if results:
             logger.info(
                 f"  Top: {results[0].child_id} | "
