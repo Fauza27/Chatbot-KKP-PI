@@ -1,13 +1,23 @@
-from sentence_transformers import CrossEncoder
-from loguru import logger
+import os
 
 from config.settings import get_settings
+
+settings = get_settings()
+if settings.hf_token:
+    os.environ.setdefault("HF_TOKEN", settings.hf_token)
+    os.environ.setdefault("HUGGINGFACE_HUB_TOKEN", settings.hf_token)
+
+from sentence_transformers import CrossEncoder
+from loguru import logger
 
 
 class CrossEncoderReranker:
     """
     Re-rank document using Cross-Encoder model.
     """
+
+    _shared_model: CrossEncoder | None = None
+    _shared_model_name: str | None = None
 
     def __init__(self, model_name: str | None = None):
         """
@@ -22,11 +32,17 @@ class CrossEncoderReranker:
 
     def _get_model(self) -> CrossEncoder:
         """Lazy load cross-encoder model."""
-        if self._model is None:
+        cls = type(self)
+        if (
+            cls._shared_model is None
+            or cls._shared_model_name != self.model_name
+        ):
             logger.info(f"Loading cross-encoder model: {self.model_name}...")
-            self._model = CrossEncoder(self.model_name)
+            cls._shared_model = CrossEncoder(self.model_name)
+            cls._shared_model_name = self.model_name
             logger.info("Cross-encoder model loaded.")
-        return self._model
+
+        return cls._shared_model
 
     def rerank(
         self,

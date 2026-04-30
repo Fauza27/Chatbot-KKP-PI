@@ -1,52 +1,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from loguru import logger
 from config.settings import get_settings
-from langchain.chains.query_constructor.base import AttributeInfo
 
 settings = get_settings()
 
-METADATA_FIELD_INFO = [
-    AttributeInfo(
-        name="section",
-        description=(
-            "Bagian/bab dari dokumen Panduan PI atau KKP. Nilai yang valid: "
-            "'Front Matter' (kata pengantar, daftar isi/tabel/gambar), "
-            "'Surat Keputusan' (SK pemberlakuan panduan), "
-            "'BAB I' (pendahuluan: latar belakang, tujuan panduan), "
-            "'BAB II' (ketentuan umum: dosen pembimbing, dosen penguji, "
-            "syarat mahasiswa, prosedur pengajuan, pelaksanaan, ujian, penilaian, kelulusan), "
-            "'BAB III' (sistematika penyusunan: gambaran umum, struktur laporan), "
-            "'BAB IV' (penjelasan sistematika: bagian awal/utama/akhir, isi tiap BAB I-V), "
-            "'BAB V' (format penulisan: kertas, margin, huruf, spasi, tabel, gambar, "
-            "bahasa, daftar pustaka APA), "
-            "'Lampiran' (contoh format dan formulir: sampul, pengesahan, abstrak, "
-            "kata pengantar, daftar isi, jadwal, wawancara, bimbingan, ujian, penilaian)"
+def _build_metadata_field_info():
+    """Build metadata schema for SelfQueryRetriever (lazy import)."""
+    from langchain.chains.query_constructor.base import AttributeInfo
+
+    return [
+        AttributeInfo(
+            name="section",
+            description=(
+                "Bagian/bab dari dokumen Panduan PI atau KKP. Nilai yang valid: "
+                "'Front Matter' (kata pengantar, daftar isi/tabel/gambar), "
+                "'Surat Keputusan' (SK pemberlakuan panduan), "
+                "'BAB I' (pendahuluan: latar belakang, tujuan panduan), "
+                "'BAB II' (ketentuan umum: dosen pembimbing, dosen penguji, "
+                "syarat mahasiswa, prosedur pengajuan, pelaksanaan, ujian, penilaian, kelulusan), "
+                "'BAB III' (sistematika penyusunan: gambaran umum, struktur laporan), "
+                "'BAB IV' (penjelasan sistematika: bagian awal/utama/akhir, isi tiap BAB I-V), "
+                "'BAB V' (format penulisan: kertas, margin, huruf, spasi, tabel, gambar, "
+                "bahasa, daftar pustaka APA), "
+                "'Lampiran' (contoh format dan formulir: sampul, pengesahan, abstrak, "
+                "kata pengantar, daftar isi, jadwal, wawancara, bimbingan, ujian, penilaian)"
+            ),
+            type="string",
         ),
-        type="string",
-    ),
-    AttributeInfo(
-        name="title",
-        description=(
-            "Judul spesifik dari bagian dokumen, misalnya: "
-            "'BAB II: Dosen Pembimbing (Ketentuan)', "
-            "'BAB V: Aturan Penulisan (Margin, Huruf, Spasi, Alinea, Bab)', "
-            "'Lampiran 3: Contoh Abstrak'. "
-            "Gunakan filter ini jika pengguna menyebut topik spesifik."
+        AttributeInfo(
+            name="title",
+            description=(
+                "Judul spesifik dari bagian dokumen, misalnya: "
+                "'BAB II: Dosen Pembimbing (Ketentuan)', "
+                "'BAB V: Aturan Penulisan (Margin, Huruf, Spasi, Alinea, Bab)', "
+                "'Lampiran 3: Contoh Abstrak'. "
+                "Gunakan filter ini jika pengguna menyebut topik spesifik."
+            ),
+            type="string",
         ),
-        type="string",
-    ),
-    AttributeInfo(
-        name="source",
-        description=(
-            "Nama file sumber dokumen. Nilai yang mungkin: "
-            "'Panduan Penyusunan Penulisan Imliah (PI) Cetak' untuk dokumen PI, "
-            "'Panduan Penyusunan Kuliah Kerja Praktik (KKP) Cetak' untuk dokumen KKP."
+        AttributeInfo(
+            name="source",
+            description=(
+                "Nama file sumber dokumen. Nilai yang mungkin: "
+                "'Panduan Penyusunan Penulisan Imliah (PI) Cetak' untuk dokumen PI, "
+                "'Panduan Penyusunan Kuliah Kerja Praktik (KKP) Cetak' untuk dokumen KKP."
+            ),
+            type="string",
         ),
-        type="string",
-    ),
-]
+    ]
 
 DOCUMENT_CONTENT_DESCRIPTION = (
     "Dokumen panduan akademik dari STMIK Widya Cipta Dharma yang terdiri dari dua jenis: "
@@ -109,11 +113,13 @@ def build_self_query_retriever(
         api_key=settings.open_api_key,
     )
 
+    metadata_field_info = _build_metadata_field_info()
+
     retriever = SelfQueryRetriever.from_llm(
         llm=llm,
         vectorstore=vector_store,
         document_contents=DOCUMENT_CONTENT_DESCRIPTION,
-        metadata_field_info=METADATA_FIELD_INFO,
+        metadata_field_info=metadata_field_info,
         structured_query_translator=SupabaseVectorTranslator(),
         search_kwargs={"k": k},
         verbose=True,
@@ -158,7 +164,7 @@ def extract_query_components(query: str) -> ParsedQuery:
         "BAB V": [
             "format", "margin", "huruf", "spasi", "kertas", "font",
             "times new roman", "tabel", "gambar", "bahasa", "eyd",
-            "daftar pustaka", "apa", "penomoran halaman", "alinea",
+            "daftar pustaka", "penomoran halaman", "alinea",
             "angka", "huruf miring",
         ],
         "Lampiran": [
@@ -169,8 +175,13 @@ def extract_query_components(query: str) -> ParsedQuery:
         ],
     }
 
+    def _matches_keyword(text: str, keyword: str) -> bool:
+        if " " in keyword:
+            return keyword in text
+        return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
+
     for section, keywords in section_keywords.items():
-        if any(kw in query_lower for kw in keywords):
+        if any(_matches_keyword(query_lower, kw) for kw in keywords):
             filters["section"] = section
             break
 
