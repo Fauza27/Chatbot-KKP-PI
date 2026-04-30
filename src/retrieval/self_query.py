@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from loguru import logger
 from config.settings import get_settings
@@ -59,43 +61,32 @@ DOCUMENT_CONTENT_DESCRIPTION = (
 )
 
 
-
 @dataclass
 class ParsedQuery:
-    """result parsing query by Self-Query."""
-    semantic_query: str         
-    filters: dict               
-    original_query: str         
+    """Hasil parsing query oleh Self-Query."""
+    semantic_query: str
+    filters: dict
+    original_query: str
+
 
 
 def build_self_query_retriever(
     supabase_client=None,
     top_k: int | None = None,
-) -> SelfQueryRetriever:
+) -> "SelfQueryRetriever": 
     """
     Bangun Self-Query Retriever yang terhubung ke Supabase.
-
-    Alur internal retriever ini:
-    1. LLM menerima query + deskripsi metadata
-    2. LLM menghasilkan structured query (semantic + filters)
-    3. Filters diterjemahkan ke SQL WHERE oleh SupabaseVectorTranslator
-    4. Vector search dijalankan dengan filter aktif
-
-    Args:
-        supabase_client: Supabase client (buat baru jika None)
-        top_k: Jumlah dokumen yang dikembalikan (override config)
-
-    Returns:
-        SelfQueryRetriever yang siap dipanggil
     """
     from langchain.retrievers.self_query.base import SelfQueryRetriever
     from langchain_community.query_constructors.supabase import SupabaseVectorTranslator
     from langchain_community.vectorstores import SupabaseVectorStore
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from supabase import create_client
-    
+
     if supabase_client is None:
-        supabase_client = create_client(settings.supabase_url, settings.supabase_service_key)
+        supabase_client = create_client(
+            settings.supabase_url, settings.supabase_service_key
+        )
 
     k = top_k or settings.retrieval_top_k
 
@@ -132,16 +123,14 @@ def build_self_query_retriever(
 
 
 def extract_query_components(query: str) -> ParsedQuery:
-    """
-    ekstrak semantic query dan filter dari query user.
-    """
+    """Ekstrak semantic query dan filter dari query user."""
     logger.debug(f"Menganalisis query: '{query}'")
 
-    filters = {}
+    filters: dict = {}
     semantic = query
     query_lower = query.lower()
 
-    section_keywords = {
+    section_keywords: dict[str, list[str]] = {
         "BAB I": [
             "latar belakang panduan", "tujuan panduan", "pendahuluan panduan",
         ],
