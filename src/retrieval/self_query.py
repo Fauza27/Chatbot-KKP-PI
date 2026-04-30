@@ -1,15 +1,7 @@
 from dataclasses import dataclass
-
-from langchain.chains.query_constructor.base import AttributeInfo
-from langchain.retrievers.self_query.base import SelfQueryRetriever
-from langchain_community.query_constructors.supabase import SupabaseVectorTranslator
-from langchain_core.documents import Document
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_community.vectorstores import SupabaseVectorStore
 from loguru import logger
-from supabase import create_client
-
 from config.settings import get_settings
+from langchain.chains.query_constructor.base import AttributeInfo
 
 settings = get_settings()
 
@@ -96,6 +88,12 @@ def build_self_query_retriever(
     Returns:
         SelfQueryRetriever yang siap dipanggil
     """
+    from langchain.retrievers.self_query.base import SelfQueryRetriever
+    from langchain_community.query_constructors.supabase import SupabaseVectorTranslator
+    from langchain_community.vectorstores import SupabaseVectorStore
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from supabase import create_client
+    
     if supabase_client is None:
         supabase_client = create_client(settings.supabase_url, settings.supabase_service_key)
 

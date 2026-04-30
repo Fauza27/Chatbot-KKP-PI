@@ -53,8 +53,8 @@ def _reciprocal_rank_fusion(
     bm25_weight: float | None = None,
 ) -> dict[str, float]:
     """Reciprocal Rank Fusion (RRF)."""
-    w_dense = dense_weight or settings.dense_weight
-    w_bm25 = bm25_weight or settings.bm25_weight
+    w_dense = settings.dense_weight if dense_weight is None else dense_weight
+    w_bm25 = settings.bm25_weight if bm25_weight is None else bm25_weight
 
     scores: dict[str, float] = {}
 

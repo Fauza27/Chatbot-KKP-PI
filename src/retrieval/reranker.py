@@ -60,11 +60,13 @@ class CrossEncoderReranker:
 
         reranked = documents[:top_n]
 
-        logger.info(
-            f"Reranking done: {len(documents)} → {len(reranked)} documents. "
-            f"Top score: {reranked[0]['cross_encoder_score']:.4f}, "
-            f"Bottom score: {reranked[-1]['cross_encoder_score']:.4f}"
-            if reranked else ""
-        )
+        if reranked:
+            logger.info(
+                f"Reranking done: {len(documents)} → {len(reranked)} documents. "
+                f"Top score: {reranked[0]['cross_encoder_score']:.4f}, "
+                f"Bottom score: {reranked[-1]['cross_encoder_score']:.4f}"
+            )
+        else:
+            logger.info(f"Reranking done: {len(documents)} → 0 documents.")
 
         return reranked
