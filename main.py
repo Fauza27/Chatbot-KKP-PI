@@ -1,9 +1,9 @@
 """
 Entry point utama: jalankan RAG pipeline secara interaktif.
- 
+
 Mengorkestrasi semua komponen:
 Self-Query → Hybrid Search → Parent-Child → Reranking → Generation
- 
+
 Penggunaan:
     python main.py
     python main.py --question "Apa syarat untuk mengambil PI?"
@@ -23,9 +23,9 @@ from config.settings import get_settings
 
 
 # ── Konfigurasi Logger ─────────────────────────────────────────
-def setup_logger(debug: bool = False):
+def setup_logger(debug: bool = False) -> None:
     """Setup loguru logger."""
-    logger.remove()  # hapus default handler
+    logger.remove()
 
     if debug:
         logger.add(
@@ -62,10 +62,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
     4. Cross-Encoder Reranking (top-N most relevant)
     5. Prompt Engineering + GPT (generate answer)
 
-    Args:
-        question: Pertanyaan dari user
-        debug: Jika True, tampilkan detail setiap tahap
-
     Returns:
         Dict berisi:
         - answer: Jawaban dari LLM
@@ -78,7 +74,7 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
     from src.retrieval.reranker import CrossEncoderReranker
     from src.generation.chain import generate_answer
 
-    metadata = {}
+    metadata: dict = {}
 
     # ── TAHAP 1: Self-Query ─────────────────────────────────
     logger.info("=" * 60)
@@ -229,7 +225,7 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
 
 
 # ── Mode: Ingestion ──────────────────────────────────────────
-def run_ingest(dataset: str = "both"):
+def run_ingest(dataset: str = "both") -> None:
     """Jalankan pipeline ingestion: load JSON → embed → upsert ke Supabase."""
     from src.ingestion.embedder import run_ingestion
 
@@ -267,7 +263,7 @@ def run_ingest(dataset: str = "both"):
 
 
 # ── Mode: Evaluasi ────────────────────────────────────────────
-def run_eval(dataset: str = "pi"):
+def run_eval(dataset: str = "pi") -> None:
     from src.evaluation.ragas_eval import (
         run_evaluation,
         EVAL_QUESTIONS_PI,
@@ -291,220 +287,8 @@ def run_eval(dataset: str = "pi"):
     logger.info(f"Evaluation scores: {scores}")
 
 
-# ── Mode: Interaktif ─────────────────────────────────────────
-# main.py — run_interactive() yang diperbaiki
-def run_interactive(debug: bool = False):
-    from src.generation.memory import ConversationMemory, IntentType
-    from src.generation.intent_classifier import IntentClassifier, reformulate_query
-    from src.generation.chain import RAGChain
-
-    print("\n" + "=" * 60)
-    print("🎓 Chatbot Panduan KKP/PI")
-    print("   STMIK Widya Cipta Dharma")
-    print("=" * 60)
-    print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
-
-    memory = ConversationMemory(max_turns=5)
-    classifier = IntentClassifier()
-    rag_chain = RAGChain()
-
-    while True:
-        try:
-            question = input("📝 Pertanyaan: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n\nSampai jumpa! 👋")
-            break
-
-        if not question:
-            continue
-        if question.lower() in ("quit", "exit", "q", "keluar"):
-            print("\nSampai jumpa! 👋")
-            break
-
-        memory.add_user_turn(question)
-        print("\n⏳ Sedang mencari jawaban...\n")
-
-        try:
-            intent, confidence, reason = classifier.classify(question, memory)
-
-            if debug:
-                logger.debug(f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}")
-
-            if intent == IntentType.CONVERSATIONAL:
-                result = rag_chain.invoke_conversational(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                )
-                answer = result["answer"]
-
-            elif intent == IntentType.CLARIFICATION:
-                result = rag_chain.invoke_clarification(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                    last_context_docs_text=memory.get_last_retrieved_docs(),
-                )
-                answer = result["answer"]
-
-            else:  # NEEDS_RETRIEVAL
-                # Reformulasi jika ada referensi implisit seperti "itu", "tersebut"
-                search_query = reformulate_query(question, memory)
-
-                from src.retrieval.self_query import extract_query_components
-                from src.retrieval.hybrid_search import HybridSearcher
-                from src.retrieval.parent_child import ParentChildFetcher
-                from src.retrieval.reranker import CrossEncoderReranker
-
-                parsed = extract_query_components(search_query)
-                searcher = HybridSearcher()
-                search_results = searcher.search(
-                    query=parsed.semantic_query,
-                    filters=parsed.filters,
-                )
-
-                if not search_results:
-                    answer = (
-                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
-                        "Silakan konsultasikan dengan Dosen Pembimbing."
-                    )
-                else:
-                    fetcher = ParentChildFetcher()
-                    parent_results = fetcher.fetch_parents(search_results)
-                    reranker = CrossEncoderReranker()
-                    reranked_parents = reranker.rerank(
-                        query=question, documents=parent_results
-                    )
-                    result = rag_chain.invoke_with_history(
-                        question=question,
-                        context_documents=reranked_parents,
-                        conversation_history=memory.get_history_for_llm(),
-                    )
-                    answer = result["answer"]
-                    # Simpan konteks untuk clarification berikutnya
-                    memory.add_assistant_turn(
-                        content=answer,
-                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
-                    )
-                    _print_answer(answer, len(reranked_parents))
-                    print()
-                    continue
-
-            memory.add_assistant_turn(content=answer)
-            _print_answer(answer, 0)
-
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            print(f"\n❌ Terjadi error: {e}")
-            print("Silakan coba lagi.\n")
-
-        print()
-
-# main.py — run_interactive() yang diperbaiki
-def run_interactive(debug: bool = False):
-    from src.generation.memory import ConversationMemory, IntentType
-    from src.generation.intent_classifier import IntentClassifier, reformulate_query
-    from src.generation.chain import RAGChain
-
-    print("\n" + "=" * 60)
-    print("🎓 Chatbot Panduan KKP/PI")
-    print("   STMIK Widya Cipta Dharma")
-    print("=" * 60)
-    print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
-
-    memory = ConversationMemory(max_turns=5)
-    classifier = IntentClassifier()
-    rag_chain = RAGChain()
-
-    while True:
-        try:
-            question = input("📝 Pertanyaan: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n\nSampai jumpa! 👋")
-            break
-
-        if not question:
-            continue
-        if question.lower() in ("quit", "exit", "q", "keluar"):
-            print("\nSampai jumpa! 👋")
-            break
-
-        memory.add_user_turn(question)
-        print("\n⏳ Sedang mencari jawaban...\n")
-
-        try:
-            intent, confidence, reason = classifier.classify(question, memory)
-
-            if debug:
-                logger.debug(f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}")
-
-            if intent == IntentType.CONVERSATIONAL:
-                result = rag_chain.invoke_conversational(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                )
-                answer = result["answer"]
-
-            elif intent == IntentType.CLARIFICATION:
-                result = rag_chain.invoke_clarification(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                    last_context_docs_text=memory.get_last_retrieved_docs(),
-                )
-                answer = result["answer"]
-
-            else:  # NEEDS_RETRIEVAL
-                # Reformulasi jika ada referensi implisit seperti "itu", "tersebut"
-                search_query = reformulate_query(question, memory)
-
-                from src.retrieval.self_query import extract_query_components
-                from src.retrieval.hybrid_search import HybridSearcher
-                from src.retrieval.parent_child import ParentChildFetcher
-                from src.retrieval.reranker import CrossEncoderReranker
-
-                parsed = extract_query_components(search_query)
-                searcher = HybridSearcher()
-                search_results = searcher.search(
-                    query=parsed.semantic_query,
-                    filters=parsed.filters,
-                )
-
-                if not search_results:
-                    answer = (
-                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
-                        "Silakan konsultasikan dengan Dosen Pembimbing."
-                    )
-                else:
-                    fetcher = ParentChildFetcher()
-                    parent_results = fetcher.fetch_parents(search_results)
-                    reranker = CrossEncoderReranker()
-                    reranked_parents = reranker.rerank(
-                        query=question, documents=parent_results
-                    )
-                    result = rag_chain.invoke_with_history(
-                        question=question,
-                        context_documents=reranked_parents,
-                        conversation_history=memory.get_history_for_llm(),
-                    )
-                    answer = result["answer"]
-                    # Simpan konteks untuk clarification berikutnya
-                    memory.add_assistant_turn(
-                        content=answer,
-                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
-                    )
-                    _print_answer(answer, len(reranked_parents))
-                    print()
-                    continue
-
-            memory.add_assistant_turn(content=answer)
-            _print_answer(answer, 0)
-
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            print(f"\n❌ Terjadi error: {e}")
-            print("Silakan coba lagi.\n")
-
-        print()
-
-
+# ── Helper print ─────────────────────────────────────────────
+# FIX: dipindah ke sini agar tersedia sebelum run_interactive dipanggil
 def _print_answer(answer: str, num_docs: int) -> None:
     print("─" * 60)
     print("💡 JAWABAN:")
@@ -515,8 +299,120 @@ def _print_answer(answer: str, num_docs: int) -> None:
         print(f"📚 Sumber: {num_docs} dokumen digunakan")
 
 
+# ── Mode: Interaktif ─────────────────────────────────────────
+# FIX: definisi duplikat dihapus — hanya ada SATU fungsi run_interactive
+def run_interactive(debug: bool = False) -> None:
+    from src.generation.memory import ConversationMemory, IntentType
+    from src.generation.intent_classifier import IntentClassifier, reformulate_query
+    from src.generation.chain import RAGChain
+
+    print("\n" + "=" * 60)
+    print("🎓 Chatbot Panduan KKP/PI")
+    print("   STMIK Widya Cipta Dharma")
+    print("=" * 60)
+    print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
+
+    memory = ConversationMemory(max_turns=5)
+    classifier = IntentClassifier()
+    rag_chain = RAGChain()
+
+    while True:
+        try:
+            question = input("📝 Pertanyaan: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\nSampai jumpa! 👋")
+            break
+
+        if not question:
+            continue
+        if question.lower() in ("quit", "exit", "q", "keluar"):
+            print("\nSampai jumpa! 👋")
+            break
+
+        memory.add_user_turn(question)
+        print("\n⏳ Sedang mencari jawaban...\n")
+
+        try:
+            intent, confidence, reason = classifier.classify(question, memory)
+
+            if debug:
+                logger.debug(
+                    f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}"
+                )
+
+            if intent == IntentType.CONVERSATIONAL:
+                result = rag_chain.invoke_conversational(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                )
+                answer = result["answer"]
+
+            elif intent == IntentType.CLARIFICATION:
+                result = rag_chain.invoke_clarification(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                    last_context_docs_text=memory.get_last_retrieved_docs(),
+                )
+                answer = result["answer"]
+
+            else:  # NEEDS_RETRIEVAL
+                from src.retrieval.self_query import extract_query_components
+                from src.retrieval.hybrid_search import HybridSearcher
+                from src.retrieval.parent_child import ParentChildFetcher
+                from src.retrieval.reranker import CrossEncoderReranker
+
+                search_query = reformulate_query(question, memory)
+                parsed = extract_query_components(search_query)
+
+                searcher = HybridSearcher()
+                search_results = searcher.search(
+                    query=parsed.semantic_query,
+                    filters=parsed.filters,
+                )
+
+                if not search_results:
+                    answer = (
+                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
+                        "Silakan konsultasikan dengan Dosen Pembimbing."
+                    )
+                else:
+                    fetcher = ParentChildFetcher()
+                    parent_results = fetcher.fetch_parents(search_results)
+
+                    reranker = CrossEncoderReranker()
+                    reranked_parents = reranker.rerank(
+                        query=question, documents=parent_results
+                    )
+
+                    result = rag_chain.invoke_with_history(
+                        question=question,
+                        context_documents=reranked_parents,
+                        conversation_history=memory.get_history_for_llm(),
+                    )
+                    answer = result["answer"]
+
+                    memory.add_assistant_turn(
+                        content=answer,
+                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
+                    )
+                    _print_answer(answer, len(reranked_parents))
+                    print()
+                    continue  # skip generic memory/print below
+
+            # Untuk CONVERSATIONAL, CLARIFICATION, dan NEEDS_RETRIEVAL (kosong)
+            memory.add_assistant_turn(content=answer)
+            _print_answer(answer, 0)
+
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            print(f"\n❌ Terjadi error: {e}")
+            print("Silakan coba lagi.\n")
+
+        print()
+
+
 # ── Main ──────────────────────────────────────────────────────
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="RAG Chatbot - Panduan KKP/PI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -524,9 +420,9 @@ def main():
 Contoh penggunaan:
   python main.py                                    # mode interaktif
   python main.py --question "Apa syarat PI?"        # single question
-    python main.py --ingest --dataset both            # ingest data KKP + PI
-    python main.py --ingest --dataset pi              # ingest data PI
-    python main.py --ingest --dataset kkp             # ingest data KKP
+  python main.py --ingest --dataset both            # ingest data KKP + PI
+  python main.py --ingest --dataset pi              # ingest data PI
+  python main.py --ingest --dataset kkp             # ingest data KKP
   python main.py --evaluate                         # evaluasi dengan RAGAS
   python main.py --debug --question "..."           # debug mode
         """,
@@ -560,11 +456,8 @@ Contoh penggunaan:
     )
 
     args = parser.parse_args()
-
-    # Setup logger
     setup_logger(debug=args.debug)
 
-    # Validate settings
     try:
         settings = get_settings()
         logger.info(
@@ -576,11 +469,10 @@ Contoh penggunaan:
         logger.error("Pastikan file .env sudah dikonfigurasi dengan benar.")
         sys.exit(1)
 
-    # Route ke mode yang dipilih
     if args.ingest:
         run_ingest(args.dataset)
     elif args.evaluate:
-        run_eval(dataset=args.dataset)  
+        run_eval(dataset=args.dataset)
     elif args.question:
         result = run_rag_pipeline(args.question, debug=args.debug)
         print("\n" + "─" * 60)
