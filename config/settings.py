@@ -39,15 +39,18 @@ class Settings(BaseSettings):
 
     # ── Retrieval ───────────────────────────────────────────
     retrieval_top_k: int = Field(default=10, description="Jumlah kandidat dari hybrid search")
-    rerank_top_n: int = Field(default=5, description="Jumlah dokumen setelah reranking")
-    bm25_weight: float = Field(default=0.3, ge=0.0, le=1.0)
-    dense_weight: float = Field(default=0.7, ge=0.0, le=1.0)
+    rerank_top_n: int = Field(default=3, description="Jumlah dokumen setelah reranking")
+    bm25_weight: float = Field(default=0.2, ge=0.0, le=1.0)
+    dense_weight: float = Field(default=0.8, ge=0.0, le=1.0)
 
     # ── Evaluasi ────────────────────────────────────────────
     ragas_sample_size: int = Field(default=50, ge=10, le=500)
 
     # ── Cross-Encoder ───────────────────────────────────────
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    # ── Hugging Face ───────────────────────────────────────
+    hf_token: str | None = None
 
     # ── Logging ─────────────────────────────────────────────
     log_level: str = "INFO"
