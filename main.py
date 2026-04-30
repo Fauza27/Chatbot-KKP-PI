@@ -292,13 +292,21 @@ def run_eval(dataset: str = "pi"):
 
 
 # ── Mode: Interaktif ─────────────────────────────────────────
+# main.py — run_interactive() yang diperbaiki
 def run_interactive(debug: bool = False):
-    """Loop tanya-jawab interaktif."""
+    from src.generation.memory import ConversationMemory, IntentType
+    from src.generation.intent_classifier import IntentClassifier, reformulate_query
+    from src.generation.chain import RAGChain
+
     print("\n" + "=" * 60)
     print("🎓 Chatbot Panduan KKP/PI")
     print("   STMIK Widya Cipta Dharma")
     print("=" * 60)
     print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
+
+    memory = ConversationMemory(max_turns=5)
+    classifier = IntentClassifier()
+    rag_chain = RAGChain()
 
     while True:
         try:
@@ -313,45 +321,75 @@ def run_interactive(debug: bool = False):
             print("\nSampai jumpa! 👋")
             break
 
+        memory.add_user_turn(question)
         print("\n⏳ Sedang mencari jawaban...\n")
 
         try:
-            result = run_rag_pipeline(question, debug=debug)
-            print("─" * 60)
-            print("💡 JAWABAN:")
-            print("─" * 60)
-            print(result["answer"])
-            print("─" * 60)
-            print(
-                f"📚 Sumber: {len(result['contexts'])} dokumen digunakan"
-            )
+            intent, confidence, reason = classifier.classify(question, memory)
 
-            if debug and result.get("metadata"):
-                meta = result["metadata"]
-                sq = meta.get("self_query", {})
-                print(f"\n🔍 Debug Info:")
-                print(f"   Query semantik: {sq.get('semantic_query', '?')}")
-                print(f"   Filters: {sq.get('filters', {})}")
-                hs = meta.get("hybrid_search", {})
-                print(f"   Search results: {hs.get('num_results', 0)}")
-                if hs.get("top_scores"):
-                    for ts in hs["top_scores"][:3]:
-                        print(
-                            f"     - {ts['child_id']} | "
-                            f"hybrid={ts['hybrid_score']} "
-                            f"dense={ts['dense_score']} "
-                            f"bm25={ts['bm25_score']}"
-                        )
-                pc = meta.get("parent_child", {})
-                print(f"   Parents fetched: {pc.get('num_parents', 0)}")
-                rr = meta.get("reranking", {})
-                print(f"   After reranking: {rr.get('num_reranked', 0)}")
-                if rr.get("reranked"):
-                    for rk in rr["reranked"]:
-                        print(
-                            f"     - {rk['parent_id']} | "
-                            f"CE={rk['ce_score']} | {rk['title'][:40]}"
-                        )
+            if debug:
+                logger.debug(f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}")
+
+            if intent == IntentType.CONVERSATIONAL:
+                result = rag_chain.invoke_conversational(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                )
+                answer = result["answer"]
+
+            elif intent == IntentType.CLARIFICATION:
+                result = rag_chain.invoke_clarification(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                    last_context_docs_text=memory.get_last_retrieved_docs(),
+                )
+                answer = result["answer"]
+
+            else:  # NEEDS_RETRIEVAL
+                # Reformulasi jika ada referensi implisit seperti "itu", "tersebut"
+                search_query = reformulate_query(question, memory)
+
+                from src.retrieval.self_query import extract_query_components
+                from src.retrieval.hybrid_search import HybridSearcher
+                from src.retrieval.parent_child import ParentChildFetcher
+                from src.retrieval.reranker import CrossEncoderReranker
+
+                parsed = extract_query_components(search_query)
+                searcher = HybridSearcher()
+                search_results = searcher.search(
+                    query=parsed.semantic_query,
+                    filters=parsed.filters,
+                )
+
+                if not search_results:
+                    answer = (
+                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
+                        "Silakan konsultasikan dengan Dosen Pembimbing."
+                    )
+                else:
+                    fetcher = ParentChildFetcher()
+                    parent_results = fetcher.fetch_parents(search_results)
+                    reranker = CrossEncoderReranker()
+                    reranked_parents = reranker.rerank(
+                        query=question, documents=parent_results
+                    )
+                    result = rag_chain.invoke_with_history(
+                        question=question,
+                        context_documents=reranked_parents,
+                        conversation_history=memory.get_history_for_llm(),
+                    )
+                    answer = result["answer"]
+                    # Simpan konteks untuk clarification berikutnya
+                    memory.add_assistant_turn(
+                        content=answer,
+                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
+                    )
+                    _print_answer(answer, len(reranked_parents))
+                    print()
+                    continue
+
+            memory.add_assistant_turn(content=answer)
+            _print_answer(answer, 0)
 
         except Exception as e:
             logger.error(f"Error: {e}")
@@ -359,6 +397,122 @@ def run_interactive(debug: bool = False):
             print("Silakan coba lagi.\n")
 
         print()
+
+# main.py — run_interactive() yang diperbaiki
+def run_interactive(debug: bool = False):
+    from src.generation.memory import ConversationMemory, IntentType
+    from src.generation.intent_classifier import IntentClassifier, reformulate_query
+    from src.generation.chain import RAGChain
+
+    print("\n" + "=" * 60)
+    print("🎓 Chatbot Panduan KKP/PI")
+    print("   STMIK Widya Cipta Dharma")
+    print("=" * 60)
+    print("Ketik pertanyaan Anda, atau 'quit' untuk keluar.\n")
+
+    memory = ConversationMemory(max_turns=5)
+    classifier = IntentClassifier()
+    rag_chain = RAGChain()
+
+    while True:
+        try:
+            question = input("📝 Pertanyaan: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\nSampai jumpa! 👋")
+            break
+
+        if not question:
+            continue
+        if question.lower() in ("quit", "exit", "q", "keluar"):
+            print("\nSampai jumpa! 👋")
+            break
+
+        memory.add_user_turn(question)
+        print("\n⏳ Sedang mencari jawaban...\n")
+
+        try:
+            intent, confidence, reason = classifier.classify(question, memory)
+
+            if debug:
+                logger.debug(f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}")
+
+            if intent == IntentType.CONVERSATIONAL:
+                result = rag_chain.invoke_conversational(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                )
+                answer = result["answer"]
+
+            elif intent == IntentType.CLARIFICATION:
+                result = rag_chain.invoke_clarification(
+                    question=question,
+                    conversation_history=memory.get_history_for_llm(),
+                    last_context_docs_text=memory.get_last_retrieved_docs(),
+                )
+                answer = result["answer"]
+
+            else:  # NEEDS_RETRIEVAL
+                # Reformulasi jika ada referensi implisit seperti "itu", "tersebut"
+                search_query = reformulate_query(question, memory)
+
+                from src.retrieval.self_query import extract_query_components
+                from src.retrieval.hybrid_search import HybridSearcher
+                from src.retrieval.parent_child import ParentChildFetcher
+                from src.retrieval.reranker import CrossEncoderReranker
+
+                parsed = extract_query_components(search_query)
+                searcher = HybridSearcher()
+                search_results = searcher.search(
+                    query=parsed.semantic_query,
+                    filters=parsed.filters,
+                )
+
+                if not search_results:
+                    answer = (
+                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
+                        "Silakan konsultasikan dengan Dosen Pembimbing."
+                    )
+                else:
+                    fetcher = ParentChildFetcher()
+                    parent_results = fetcher.fetch_parents(search_results)
+                    reranker = CrossEncoderReranker()
+                    reranked_parents = reranker.rerank(
+                        query=question, documents=parent_results
+                    )
+                    result = rag_chain.invoke_with_history(
+                        question=question,
+                        context_documents=reranked_parents,
+                        conversation_history=memory.get_history_for_llm(),
+                    )
+                    answer = result["answer"]
+                    # Simpan konteks untuk clarification berikutnya
+                    memory.add_assistant_turn(
+                        content=answer,
+                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
+                    )
+                    _print_answer(answer, len(reranked_parents))
+                    print()
+                    continue
+
+            memory.add_assistant_turn(content=answer)
+            _print_answer(answer, 0)
+
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            print(f"\n❌ Terjadi error: {e}")
+            print("Silakan coba lagi.\n")
+
+        print()
+
+
+def _print_answer(answer: str, num_docs: int) -> None:
+    print("─" * 60)
+    print("💡 JAWABAN:")
+    print("─" * 60)
+    print(answer)
+    print("─" * 60)
+    if num_docs > 0:
+        print(f"📚 Sumber: {num_docs} dokumen digunakan")
 
 
 # ── Main ──────────────────────────────────────────────────────
