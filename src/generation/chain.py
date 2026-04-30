@@ -395,18 +395,21 @@ class RAGChain:
             yield chunk
 
 
+_rag_chain_instance: object | None = None
+
+def _get_rag_chain():
+    """Lazy singleton untuk RAG chain."""
+    global _rag_chain_instance
+    if _rag_chain_instance is None:
+        _rag_chain_instance = build_rag_chain(streaming=False)
+    return _rag_chain_instance
+
+
 def generate_answer(question: str, context: str) -> str:
     """
     Generate jawaban untuk pertanyaan berdasarkan konteks (string).
-
-    Args:
-        question: Pertanyaan dari user
-        context: Konteks dokumen yang sudah diformat (dari ParentChildFetcher)
-
-    Returns:
-        Jawaban string dari LLM
     """
-    chain = build_rag_chain()
+    chain = _get_rag_chain() 
 
     logger.info(f"Generating answer untuk: '{question[:80]}...'")
     logger.debug(f"Context length: {len(context)} chars")
