@@ -22,7 +22,6 @@ from config.settings import get_settings
 # ── Evaluation Dataset ──────────────────────────────────────────
 # Mendukung evaluasi untuk PI dan KKP
 EVAL_QUESTIONS_PI = [
-    # ...existing PI questions (copy from above)...
     {"question": "Apa syarat SKS minimal untuk mengambil Penulisan Ilmiah (PI)?", "ground_truth": "Mahasiswa yang berhak mengambil PI telah menyelesaikan mata kuliah dengan jumlah SKS minimal 100 SKS dan IP Kumulatif minimal 2,00."},
     {"question": "Siapa yang menjadi dosen pembimbing PI?", "ground_truth": "Dosen Pembimbing PI adalah Dosen Pembimbing Akademik (Dosen Wali). Dosen Pembimbing harus terdaftar sebagai dosen STMIK Widya Cipta Dharma dan memiliki jabatan fungsional minimal asisten ahli atau lektor dengan kualifikasi pendidikan S2 atau S3."},
     {"question": "Berapa lama maksimal masa bimbingan PI?", "ground_truth": "Maksimal masa bimbingan 6 bulan (1 semester). Perpanjangan dapat diberikan dengan persetujuan Ketua Program Studi setelah rekomendasi Dosen Pembimbing."},
@@ -42,10 +41,60 @@ EVAL_QUESTIONS_PI = [
 
 # Contoh: tambahkan pertanyaan KKP sesuai kebutuhan
 EVAL_QUESTIONS_KKP = [
-    {"question": "Apa syarat SKS minimal untuk mengambil Kuliah Kerja Praktik (KKP)?", "ground_truth": "Mahasiswa yang berhak mengambil KKP telah menyelesaikan mata kuliah dengan jumlah SKS minimal 100 SKS dan IP Kumulatif minimal 2,00."},
-    {"question": "Berapa lama pelaksanaan KKP?", "ground_truth": "Pelaksanaan KKP minimal 1 bulan (4 minggu) di instansi/industri yang relevan."},
-    {"question": "Apa saja dokumen yang harus dikumpulkan setelah KKP?", "ground_truth": "Laporan KKP, surat keterangan selesai dari instansi, dan logbook kegiatan harian."},
-    # ...tambahkan pertanyaan lain sesuai kebutuhan...
+    {
+        "question": "Apa syarat SKS minimal untuk mengambil Kuliah Kerja Praktik (KKP)?",
+        "ground_truth": (
+            "Mahasiswa yang berhak mengikuti KKP adalah mahasiswa yang telah "
+            "menyelesaikan mata kuliah dengan jumlah SKS minimal 100 SKS dengan "
+            "IP Kumulatif minimal 2,00."
+        ),
+    },
+    {
+        "question": "Berapa lama minimal pelaksanaan KKP?",
+        "ground_truth": (
+            "Kuliah Kerja Praktik dapat dilaksanakan pada suatu Perusahaan atau "
+            "Instansi minimal selama 30 (Tiga Puluh) hari kerja atau 1 (satu) bulan."
+        ),
+    },
+    {
+        "question": "Apa saja berkas yang harus dilampirkan saat mendaftar ujian KKP?",
+        "ground_truth": (
+            "Berkas yang harus dilampirkan meliputi: Form Pengecekan Syarat Administrasi, "
+            "Form Pendaftaran Ujian KKP, Form Permohonan Ujian KKP, Lembar Persetujuan "
+            "Ujian KKP, Form Bimbingan Laporan KKP, Transkrip Nilai (SKS minimal 100, "
+            "IPK minimal 2.00), Kuitansi BPP dan SKS, KRS yang mencantumkan KKP, "
+            "Surat keterangan penelitian, Presensi kehadiran dan nilai dari tempat "
+            "penelitian, Daftar rincian kegiatan KKP, Daftar wawancara, Draf laporan KKP, "
+            "Lembar Persetujuan Waktu Ujian KKP, dan Bukti anti-plagiarisme maksimal 30%."
+        ),
+    },
+    {
+        "question": "Bagaimana sistem penilaian KKP?",
+        "ground_truth": (
+            "Nilai KKP diberikan oleh Dosen Internal STMIK Wicida (Pembimbing Utama, "
+            "Ketua Penguji, dan Anggota Penguji) dan Pembimbing Lapangan dengan "
+            "perbandingan 60:40. Skala nilai: A (80-100) Sangat Baik-Lulus, "
+            "B (70-79) Baik-Lulus, C (60-69) Cukup-Lulus, D (40-59) Kurang-Tidak Lulus, "
+            "E (0-39) Sangat Kurang-Tidak Lulus."
+        ),
+    },
+    {
+        "question": "Berapa kali minimal pertemuan bimbingan KKP?",
+        "ground_truth": (
+            "Pertemuan dengan Dosen Pembimbing KKP dijadwalkan minimal 8 kali, "
+            "terdiri dari minimal 2 kali selama tahap pelaksanaan kegiatan KKP dan "
+            "6 kali selama tahap penyusunan laporan akhir KKP."
+        ),
+    },
+    {
+        "question": "Apa saja kriteria tempat KKP yang diizinkan?",
+        "ground_truth": (
+            "Tempat KKP harus merupakan instansi pemerintah, BUMN, BUMD, perusahaan "
+            "swasta, lembaga penelitian, startup, atau organisasi lain berbadan hukum "
+            "resmi, relevan dengan bidang keilmuan program studi, memiliki kegiatan "
+            "operasional aktif, dan dapat menerima maksimal 5 mahasiswa per instansi."
+        ),
+    },
 ]
 
 def get_eval_questions(dataset: str) -> list[dict]:
