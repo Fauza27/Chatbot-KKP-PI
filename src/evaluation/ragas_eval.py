@@ -1,21 +1,40 @@
 import json
+import warnings
 from pathlib import Path
 from datetime import datetime
+import math
+from statistics import mean
 
-from ragas import evaluate
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+from ragas import evaluate, EvaluationDataset, SingleTurnSample
 from ragas.metrics import (
     faithfulness,
     answer_relevancy,
+    answer_correctness,
+    answer_similarity,
     context_precision,
     context_recall,
 )
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from datasets import Dataset
 from loguru import logger
 
 from config.settings import get_settings
+
+
+# ── Threshold targets ───────────────────────────────────────────
+THRESHOLD_TARGETS = {
+    "faithfulness": 0.85,
+    "answer_relevancy": 0.85,
+    "answer_correctness": 0.85,
+    "answer_similarity": 0.85,
+    "context_precision": 0.85,
+    "context_recall": 0.85,
+}
+
+METRIC_NAMES = list(THRESHOLD_TARGETS.keys())
 
 
 
@@ -875,6 +894,76 @@ def create_evaluation_dataset(dataset: str = "pi") -> list[dict]:
     return get_eval_questions(dataset)
 
 
+def _diagnose_metric(metric_name: str, score: float) -> dict:
+    """Diagnosa penyebab dan rekomendasi untuk metrik yang gagal threshold."""
+    diagnosis = {"metric": metric_name, "score": score, "threshold": THRESHOLD_TARGETS[metric_name]}
+
+    diagnoses = {
+        "faithfulness": {
+            "cause": "LLM menghasilkan informasi yang TIDAK didukung oleh konteks (halusinasi)",
+            "component": "Generation (Prompt / LLM)",
+            "recommendations": [
+                "Perkuat instruksi di SYSTEM_PROMPT agar LLM hanya menjawab dari konteks",
+                "Tambahkan 'Jangan menambahkan informasi di luar dokumen' di prompt",
+                "Kurangi temperature LLM (gunakan 0)",
+                "Pertimbangkan max_tokens yang lebih kecil agar jawaban lebih fokus",
+            ],
+        },
+        "answer_relevancy": {
+            "cause": "Jawaban LLM menyimpang dari pertanyaan yang diajukan",
+            "component": "Generation (Prompt)",
+            "recommendations": [
+                "Pastikan pertanyaan dimasukkan dengan jelas dalam prompt",
+                "Tambahkan instruksi 'Jawab LANGSUNG pertanyaan yang diajukan'",
+                "Hindari informasi tambahan yang tidak diminta",
+            ],
+        },
+        "answer_correctness": {
+            "cause": "Jawaban tidak sesuai dengan ground truth (fakta kurang tepat)",
+            "component": "Retrieval + Generation",
+            "recommendations": [
+                "Periksa apakah konteks yang di-retrieve sudah mengandung jawaban",
+                "Perbaiki ground truth jika kurang akurat",
+                "Tingkatkan retrieval_top_k atau rerank_top_n",
+            ],
+        },
+        "answer_similarity": {
+            "cause": "Jawaban secara semantik berbeda jauh dari ground truth",
+            "component": "Generation",
+            "recommendations": [
+                "Instruksikan LLM untuk menjawab dengan ringkas dan langsung",
+                "Kurangi elaborasi yang tidak diperlukan",
+                "Pastikan format jawaban konsisten",
+            ],
+        },
+        "context_precision": {
+            "cause": "Banyak konteks yang tidak relevan masuk ke top results",
+            "component": "Retrieval (Hybrid Search + Reranker)",
+            "recommendations": [
+                "Kurangi retrieval_top_k agar lebih selektif",
+                "Tingkatkan dense_weight vs bm25_weight",
+                "Pertimbangkan cross-encoder model yang lebih kuat",
+            ],
+        },
+        "context_recall": {
+            "cause": "Retrieval GAGAL menemukan informasi yang dibutuhkan",
+            "component": "Retrieval (Embedding + Search)",
+            "recommendations": [
+                "Tingkatkan retrieval_top_k",
+                "Periksa chunking strategy — apakah informasi terpecah",
+                "Verifikasi data sudah ter-ingest dengan benar",
+                "Cek self_query filter — mungkin terlalu ketat",
+            ],
+        },
+    }
+
+    info = diagnoses.get(metric_name, {})
+    diagnosis["cause"] = info.get("cause", "Unknown")
+    diagnosis["component"] = info.get("component", "Unknown")
+    diagnosis["recommendations"] = info.get("recommendations", [])
+    return diagnosis
+
+
 def run_evaluation(
     pipeline_fn,
     eval_data: list[dict] | None = None,
@@ -883,6 +972,9 @@ def run_evaluation(
     """
     Jalankan evaluasi RAGAS pada pipeline RAG.
 
+    Menggunakan RAGAS v0.4.x API (SingleTurnSample + EvaluationDataset).
+    Semua 6 metrik di-enforce dengan threshold 85%.
+
     Args:
         pipeline_fn: Fungsi yang menerima question (str) dan mengembalikan
                     dict {"answer": str, "contexts": list[str]}
@@ -890,43 +982,47 @@ def run_evaluation(
         output_path: Path untuk menyimpan hasil (default: auto-generate)
 
     Returns:
-        Dict berisi skor RAGAS per metrik
+        Dict berisi skor RAGAS per metrik + diagnostik
     """
     settings = get_settings()
     eval_data = eval_data or EVAL_QUESTIONS_PI
 
     logger.info(f"Memulai evaluasi RAGAS dengan {len(eval_data)} pertanyaan...")
 
-    # 1. Jalankan pipeline untuk setiap pertanyaan
+    # 1. Jalankan pipeline untuk setiap pertanyaan → buat SingleTurnSample
+    samples: list[SingleTurnSample] = []
     questions = []
     answers = []
-    contexts = []
+    contexts_list = []
     ground_truths = []
 
     for i, item in enumerate(eval_data):
         q = item["question"]
-        logger.info(f"[{i+1}/{len(eval_data)}] Evaluating: {q[:60]}...")
+        logger.info(f"[{i+1}/{len(eval_data)}] Pipeline: {q[:60]}...")
 
         try:
             result = pipeline_fn(q)
-            questions.append(q)
-            answers.append(result["answer"])
-            contexts.append(result["contexts"])
-            ground_truths.append(item["ground_truth"])
+            ans = result["answer"]
+            ctxs = result["contexts"]
         except Exception as e:
-            logger.error(f"Error evaluating question '{q}': {e}")
-            questions.append(q)
-            answers.append(f"Error: {e}")
-            contexts.append([""])
-            ground_truths.append(item["ground_truth"])
+            logger.error(f"Error pipeline '{q}': {e}")
+            ans = f"Error: {e}"
+            ctxs = [""]
 
-    # 2. Buat HuggingFace Dataset untuk RAGAS
-    dataset = Dataset.from_dict({
-        "question": questions,
-        "answer": answers,
-        "contexts": contexts,
-        "ground_truth": ground_truths,
-    })
+        questions.append(q)
+        answers.append(ans)
+        contexts_list.append(ctxs)
+        ground_truths.append(item["ground_truth"])
+
+        samples.append(SingleTurnSample(
+            user_input=q,
+            response=ans,
+            retrieved_contexts=ctxs,
+            reference=item["ground_truth"],
+        ))
+
+    # 2. Buat EvaluationDataset (RAGAS v0.4.x)
+    eval_dataset = EvaluationDataset(samples=samples)
 
     # 3. Setup evaluator LLM dan embeddings
     evaluator_llm = LangchainLLMWrapper(
@@ -946,10 +1042,12 @@ def run_evaluation(
     # 4. Jalankan evaluasi RAGAS
     logger.info("Menjalankan RAGAS evaluation...")
     result = evaluate(
-        dataset=dataset,
+        dataset=eval_dataset,
         metrics=[
             faithfulness,
             answer_relevancy,
+            answer_correctness,
+            answer_similarity,
             context_precision,
             context_recall,
         ],
@@ -957,26 +1055,93 @@ def run_evaluation(
         embeddings=evaluator_embeddings,
     )
 
-    # 5. Extract scores
-    scores = {
-        "faithfulness": float(result["faithfulness"]),
-        "answer_relevancy": float(result["answer_relevancy"]),
-        "context_precision": float(result["context_precision"]),
-        "context_recall": float(result["context_recall"]),
-    }
+    # 5. Extract aggregate scores
+    def _safe_score(value) -> float:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if isinstance(value, (list, tuple)):
+            values = [v for v in value if v is not None and not (isinstance(v, float) and math.isnan(v))]
+            return mean(values) if values else 0.0
+        val = float(value)
+        return 0.0 if math.isnan(val) else val
 
-    # Hitung rata-rata sebagai overall score
+    scores = {m: _safe_score(result[m]) for m in METRIC_NAMES}
     scores["overall"] = sum(scores.values()) / len(scores)
 
+    # 6. Print aggregate results
     logger.info("=" * 60)
     logger.info("HASIL EVALUASI RAGAS")
     logger.info("=" * 60)
-    for metric, score in scores.items():
-        bar = "█" * int(score * 20) + "░" * (20 - int(score * 20))
-        logger.info(f"  {metric:>20s}: {score:.4f} |{bar}|")
+    all_pass = True
+    for metric in METRIC_NAMES:
+        score = scores[metric]
+        threshold = THRESHOLD_TARGETS[metric]
+        status = "PASS" if score >= threshold else "FAIL"
+        if score < threshold:
+            all_pass = False
+        bar = "#" * int(score * 20) + "." * (20 - int(score * 20))
+        logger.info(f"  {metric:>20s}: {score:.4f} |{bar}| {status} (threshold={threshold})")
+    logger.info(f"  {'overall':>20s}: {scores['overall']:.4f}")
     logger.info("=" * 60)
 
-    # 6. Simpan hasil ke file
+    if all_pass:
+        logger.success("SEMUA METRIK PASS (>= 0.85)!")
+    else:
+        logger.warning("Ada metrik yang FAIL (< 0.85) - lihat diagnostik di bawah")
+
+    # 7. Per-question metrics
+    result_df = result.to_pandas()
+    per_question_metrics: list[dict] = []
+    for i in range(len(questions)):
+        row = result_df.iloc[i]
+        metrics_row = {}
+        for col in METRIC_NAMES:
+            value = row.get(col)
+            if isinstance(value, float) and math.isnan(value):
+                value = None
+            metrics_row[col] = value
+        per_question_metrics.append(metrics_row)
+
+    # 8. Diagnostik per metrik yang gagal
+    diagnostics: list[dict] = []
+    for metric, threshold in THRESHOLD_TARGETS.items():
+        if scores[metric] >= threshold:
+            continue
+
+        diagnosis = _diagnose_metric(metric, scores[metric])
+
+        # Cari pertanyaan yang paling bermasalah
+        failing_questions = []
+        for idx in range(len(questions)):
+            q_score = per_question_metrics[idx].get(metric)
+            if q_score is not None and q_score < threshold:
+                failing_questions.append({
+                    "index": idx + 1,
+                    "question": questions[idx],
+                    "score": round(q_score, 4),
+                    "answer_preview": answers[idx][:150],
+                })
+
+        failing_questions.sort(key=lambda x: x["score"])
+        diagnosis["failing_questions"] = failing_questions
+        diagnosis["num_failing"] = len(failing_questions)
+        diagnosis["num_total"] = len(questions)
+        diagnostics.append(diagnosis)
+
+        logger.warning(
+            f"DIAGNOSTIK {metric}: {len(failing_questions)}/{len(questions)} "
+            f"pertanyaan gagal (avg={scores[metric]:.4f})"
+        )
+        logger.warning(f"  Penyebab: {diagnosis['cause']}")
+        logger.warning(f"  Komponen: {diagnosis['component']}")
+        for rec in diagnosis["recommendations"][:2]:
+            logger.warning(f"  -> {rec}")
+        for item in failing_questions[:3]:
+            logger.warning(
+                f"  [{item['index']}] score={item['score']:.4f} q={item['question'][:80]}"
+            )
+
+    # 9. Simpan hasil ke file
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"evaluation_results_{timestamp}.json"
@@ -984,15 +1149,22 @@ def run_evaluation(
     output_data = {
         "timestamp": datetime.now().isoformat(),
         "num_questions": len(eval_data),
+        "threshold": THRESHOLD_TARGETS,
+        "all_pass": all_pass,
         "scores": scores,
+        "diagnostics": diagnostics,
         "details": [
             {
+                "index": i + 1,
                 "question": q,
                 "answer": a,
-                "contexts": c,
                 "ground_truth": gt,
+                "contexts": c,
+                "metrics": per_question_metrics[i],
             }
-            for q, a, c, gt in zip(questions, answers, contexts, ground_truths)
+            for i, (q, a, c, gt) in enumerate(
+                zip(questions, answers, contexts_list, ground_truths)
+            )
         ],
     }
 
