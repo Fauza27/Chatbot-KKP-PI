@@ -1,4 +1,3 @@
-# src/retrieval/hybrid_search.py  (nama file diperbaiki: hybird → hybrid)
 from __future__ import annotations
 
 import re
@@ -19,7 +18,7 @@ settings = get_settings()
 
 @dataclass
 class HybridSearchResult:
-    """one document result of hybrid search with combined score."""
+    """One document result of hybrid search with combined score."""
     document: Document
     dense_score: float
     bm25_score: float
@@ -53,7 +52,7 @@ def _reciprocal_rank_fusion(
     dense_weight: float | None = None,
     bm25_weight: float | None = None,
 ) -> dict[str, float]:
-    """Reciprocal Rank Fusion (RRF)"""
+    """Reciprocal Rank Fusion (RRF)."""
     w_dense = dense_weight or settings.dense_weight
     w_bm25 = bm25_weight or settings.bm25_weight
 
@@ -75,22 +74,18 @@ class HybridSearcher:
         self._supabase = supabase_client or create_client(
             settings.supabase_url, settings.supabase_service_key
         )
+        # ✅ BUG 1 FIX: typo "dimmensions" → "dimensions"
         self._embedder = OpenAIEmbeddings(
             model=settings.embedding_model,
             api_key=settings.open_api_key,
-            dimmensions=2000,
+            dimensions=2000,
         )
         self._bm25_corpus: list[str] = []
         self._bm25_doc_ids: list[str] = []
         self._bm25_index: BM25Okapi | None = None
 
     def _build_bm25_index(self, documents: list[dict]) -> bool:
-        """
-        Build BM25 index from documents list.
-
-        Returns:
-            True jika index berhasil dibangun, False jika documents kosong.
-        """
+        """Build BM25 index from documents list."""
         if not documents:
             logger.warning("BM25 index tidak dibangun: documents kosong.")
             self._bm25_corpus = []
@@ -158,9 +153,12 @@ class HybridSearcher:
         bm25_built = self._build_bm25_index(db_results)
         query_tokens = _tokenize(query)
 
+        # ✅ BUG 2 & 3 FIX: logika if/else yang benar tanpa duplikat assignment
         if bm25_built and self._bm25_index is not None:
             bm25_scores_raw = self._bm25_index.get_scores(query_tokens)
-            max_bm25 = float(np.max(bm25_scores_raw)) if np.max(bm25_scores_raw) > 0 else 1.0
+            # ✅ BUG 3 FIX: hitung np.max() sekali saja
+            max_bm25_val = float(np.max(bm25_scores_raw))
+            max_bm25 = max_bm25_val if max_bm25_val > 0 else 1.0
             bm25_scores_normalized = bm25_scores_raw / max_bm25
 
             bm25_ranked = sorted(
@@ -176,10 +174,10 @@ class HybridSearcher:
                 for i, score in enumerate(bm25_scores_normalized)
             }
         else:
-            # BM25 tidak tersedia, fallback ke dense-only RRF
             logger.warning("BM25 index tidak tersedia, menggunakan dense score saja.")
             bm25_ranked = []
             bm25_lookup = {}
+        # ✅ BUG 2 FIX: baris duplikat "bm25_lookup = {...}" dihapus dari sini
 
         dense_ranked = [
             (row["id"], row.get("rrf_score", 0.0)) for row in db_results
@@ -187,11 +185,6 @@ class HybridSearcher:
 
         final_scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked)
         db_lookup = {row["id"]: row for row in db_results}
-        
-        bm25_lookup = {
-            self._bm25_doc_ids[i]: float(score)
-            for i, score in enumerate(bm25_scores_normalized)
-        }
 
         results: list[HybridSearchResult] = []
 

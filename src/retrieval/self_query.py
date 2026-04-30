@@ -104,7 +104,7 @@ def build_self_query_retriever(
     embedder = OpenAIEmbeddings(
         model=settings.embedding_model,
         api_key=settings.open_api_key,
-        dimmensions=2000,
+        dimensions=2000,
     )
 
     vector_store = SupabaseVectorStore(
