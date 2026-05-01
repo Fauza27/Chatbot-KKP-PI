@@ -44,10 +44,7 @@ EVAL_QUESTIONS_PI = [
     # ── Syarat & Ketentuan ──────────────────────────────────────
     {
         "question": "Apa syarat SKS minimal untuk mengambil Penulisan Ilmiah (PI)?",
-        "ground_truth": (
-            "Mahasiswa yang berhak mengambil PI telah menyelesaikan mata kuliah "
-            "dengan jumlah SKS minimal 100 SKS dan IP Kumulatif minimal 2,00."
-        ),
+        "ground_truth": "Minimal 100 SKS dengan IPK minimal 2,00.",
     },
     {
         "question": "Berapa IP Kumulatif minimal yang harus dimiliki mahasiswa untuk mengambil PI?",
@@ -102,11 +99,7 @@ EVAL_QUESTIONS_PI = [
     },
     {
         "question": "Apa syarat jabatan fungsional minimal untuk menjadi dosen pembimbing atau penguji PI?",
-        "ground_truth": (
-            "Dosen Pembimbing dan Dosen Penguji harus memiliki jabatan fungsional "
-            "minimal asisten ahli atau lektor dengan kualifikasi pendidikan S2 atau S3 "
-            "dan kompetensi relevan dengan PI."
-        ),
+        "ground_truth": "Minimal asisten ahli atau lektor dengan kualifikasi S2 atau S3 dan kompetensi relevan dengan PI.",
     },
     {
         "question": "Dalam kondisi apa mahasiswa dapat mengajukan penggantian dosen pembimbing PI?",
@@ -127,11 +120,7 @@ EVAL_QUESTIONS_PI = [
     # ── Proses Bimbingan ─────────────────────────────────────────
     {
         "question": "Berapa lama maksimal masa bimbingan PI?",
-        "ground_truth": (
-            "Maksimal masa bimbingan 6 bulan (1 semester). Perpanjangan dapat "
-            "diberikan dengan persetujuan Ketua Program Studi setelah rekomendasi "
-            "Dosen Pembimbing."
-        ),
+        "ground_truth": "Maksimal 6 bulan (1 semester), dapat diperpanjang dengan persetujuan Ketua Program Studi.",
     },
     {
         "question": "Berapa kali minimal pertemuan bimbingan PI dengan dosen pembimbing?",
@@ -150,10 +139,7 @@ EVAL_QUESTIONS_PI = [
     },
     {
         "question": "Apa yang harus dibawa mahasiswa setiap kali melakukan bimbingan PI?",
-        "ground_truth": (
-            "Mahasiswa wajib membawa lembar bimbingan yang memuat materi bimbingan, "
-            "tanggal, dan tanda tangan Dosen Pembimbing setiap kali melakukan bimbingan."
-        ),
+        "ground_truth": "Lembar bimbingan yang memuat materi bimbingan, tanggal, dan tanda tangan Dosen Pembimbing.",
     },
     {
         "question": "Kapan mahasiswa harus pertama kali menemui dosen pembimbing setelah form usulan PI disetujui?",
@@ -271,10 +257,7 @@ EVAL_QUESTIONS_PI = [
     # ── Format & Tata Tulis ──────────────────────────────────────
     {
         "question": "Berapa minimal halaman laporan PI?",
-        "ground_truth": (
-            "Laporan PI minimal 40 halaman di luar cover, daftar isi, daftar tabel, "
-            "daftar gambar, daftar lampiran, daftar pustaka, dan lampiran."
-        ),
+        "ground_truth": "Minimal 40 halaman (tidak termasuk cover, daftar isi, daftar tabel, daftar gambar, daftar lampiran, daftar pustaka, dan lampiran).",
     },
     {
         "question": "Apa format margin yang digunakan dalam penulisan PI?",
@@ -292,11 +275,7 @@ EVAL_QUESTIONS_PI = [
     },
     {
         "question": "Berapa spasi yang digunakan untuk penulisan naskah PI?",
-        "ground_truth": (
-            "Naskah utama menggunakan 1,5 spasi. Daftar isi, daftar tabel, "
-            "daftar gambar, daftar lampiran, judul tabel, judul gambar, dan "
-            "daftar pustaka menggunakan 1 spasi."
-        ),
+        "ground_truth": "1,5 spasi untuk naskah utama; 1 spasi untuk daftar isi, daftar tabel, daftar gambar, daftar lampiran, judul tabel, judul gambar, dan daftar pustaka.",
     },
     {
         "question": "Bagaimana ketentuan penomoran halaman bagian awal laporan PI?",
@@ -375,12 +354,7 @@ EVAL_QUESTIONS_PI = [
     },
     {
         "question": "Apa format penulisan daftar pustaka yang digunakan dalam PI?",
-        "ground_truth": (
-            "Menggunakan format American Psychological Association (APA). "
-            "Disarankan menggunakan Mendeley atau tools reference lainnya. "
-            "Urutan disusun berdasarkan abjad nama penulis pertama dengan "
-            "hanging indent untuk baris kedua dan seterusnya."
-        ),
+        "ground_truth": "Format APA (American Psychological Association). Disarankan menggunakan Mendeley atau tools reference lainnya. Urutan berdasarkan abjad nama penulis pertama dengan hanging indent.",
     },
     {
         "question": "Bagaimana format penulisan referensi artikel jurnal dalam daftar pustaka PI?",
@@ -476,10 +450,7 @@ EVAL_QUESTIONS_PI = [
     },
     {
         "question": "Berapa batas maksimal tingkat plagiarisme yang diizinkan untuk PI?",
-        "ground_truth": (
-            "Bukti pemeriksaan anti-plagiarisme dengan tingkat kemiripan maksimal "
-            "30% dari perangkat lunak/aplikasi pendeteksi plagiarisme yang valid."
-        ),
+        "ground_truth": "Maksimal 30% berdasarkan hasil pemeriksaan dari perangkat lunak pendeteksi plagiarisme yang valid.",
     },
 
     # ── Capaian Pembelajaran ─────────────────────────────────────
@@ -541,12 +512,7 @@ EVAL_QUESTIONS_KKP = [
     # ── Dosen Pembimbing & Penguji ───────────────────────────────
     {
         "question": "Siapa yang menjadi dosen pembimbing KKP?",
-        "ground_truth": (
-            "Dosen Pembimbing KKP adalah Dosen Pembimbing Akademik (Dosen Wali). "
-            "Dosen pembimbing harus terdaftar sebagai dosen STMIK Widya Cipta Dharma "
-            "dengan jabatan fungsional minimal asisten ahli atau lektor, kualifikasi "
-            "pendidikan S2 atau S3, dan kompetensi relevan."
-        ),
+        "ground_truth": "Dosen Pembimbing Akademik (Dosen Wali) dengan jabatan minimal asisten ahli atau lektor, kualifikasi S2 atau S3, dan kompetensi relevan.",
     },
     {
         "question": "Apa tugas dosen penguji pada ujian KKP?",
@@ -585,11 +551,7 @@ EVAL_QUESTIONS_KKP = [
     },
     {
         "question": "Berapa lama maksimal masa bimbingan KKP?",
-        "ground_truth": (
-            "Maksimal masa bimbingan 6 bulan (1 semester). Perpanjangan dapat "
-            "diberikan dengan persetujuan Ketua Program Studi setelah rekomendasi "
-            "Dosen Pembimbing."
-        ),
+        "ground_truth": "Maksimal 6 bulan (1 semester), dapat diperpanjang dengan persetujuan Ketua Program Studi.",
     },
     {
         "question": "Apa yang dilakukan mahasiswa selama pelaksanaan KKP di instansi?",
