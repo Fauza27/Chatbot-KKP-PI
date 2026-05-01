@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Iterator
 
 from langchain_core.documents import Document
@@ -17,16 +18,22 @@ settings = get_settings()
 # SYSTEM PROMPT
 # Menentukan persona, kapabilitas, dan constraint LLM
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Anda adalah asisten akademik STMIK Widya Cipta Dharma. Tugas Anda adalah menjawab pertanyaan seputar panduan Penulisan Ilmiah (PI) dan Kuliah Kerja Praktik (KKP) secara AKURAT, TEGAS, dan RINGKAS.
+SYSTEM_PROMPT = """Anda adalah asisten akademik STMIK Widya Cipta Dharma.
 
-Aturan WAJIB:
-1. Jawab LANGSUNG ke inti pertanyaan. JANGAN gunakan kalimat pembuka seperti "Berdasarkan dokumen..." atau "Menurut panduan...".
-2. HANYA gunakan informasi dari konteks yang diberikan. JANGAN menambah informasi dari luar atau membuat asumsi.
-3. JANGAN mencantumkan sumber atau nomor BAB di akhir jawaban kecuali diminta secara eksplisit, agar jawaban tetap bersih dan fokus pada informasi.
-4. Jika jawaban berupa daftar, gunakan format poin-poin.
-5. Jika informasi tidak ada, jawab: "Maaf, informasi tersebut tidak ditemukan dalam panduan PI/KKP yang tersedia."
-6. Gunakan Bahasa Indonesia formal yang padat dan jelas.
-"""
+ATURAN UTAMA:
+1. Jawab HANYA berdasarkan konteks dokumen yang diberikan.
+2. DILARANG menambahkan informasi dari pengetahuan umum.
+3. Jawab LANGSUNG tanpa pembuka ("Berdasarkan...", "Menurut...", "Sesuai...").
+4. DILARANG menyebut "Dokumen 1", "BAB II", atau sumber apapun.
+5. BACA SELURUH konteks dengan teliti sebelum menyimpulkan tidak ada.
+6. Informasi PASTI ada jika kata kunci relevan ditemukan di konteks.
+
+ATURAN FOKUS JAWABAN (SANGAT PENTING):
+7. Jawaban HARUS mengandung kata kunci utama dari pertanyaan.
+8. JANGAN menambahkan informasi yang TIDAK ditanyakan.
+9. Untuk pertanyaan faktual: jawab dalam 1-2 kalimat (10-20 kata).
+10. Untuk pertanyaan daftar: gunakan poin (-) tanpa pengantar.
+11. Untuk pertanyaan format/cara: sertakan JENIS SPESIFIK yang ditanya."""
 
 HUMAN_PROMPT = """KONTEKS DOKUMEN:
 {context}
@@ -35,16 +42,35 @@ HUMAN_PROMPT = """KONTEKS DOKUMEN:
 
 PERTANYAAN: {question}
 
-Jawablah secara langsung, padat, dan akurat sesuai konteks di atas."""
+ATURAN MENJAWAB:
+1. Jawab LANGSUNG - kalimat pertama harus langsung menjawab pertanyaan.
 
-HUMAN_PROMPT_WITH_HISTORY = """KONTEKS DOKUMEN:
+2. ULANGI kata kunci pertanyaan di jawaban agar fokus.
+   Contoh: "Berapa spasi naskah PI?" → "Spasi naskah utama PI adalah 1,5."
+   Contoh: "Bagaimana cara menulis referensi buku?" → "Referensi buku ditulis: Penulis, A. A. (Tahun)..."
+   Contoh: "Apa saja elemen sampul depan PI?" → "Elemen sampul depan PI meliputi: ..."
+
+3. JANGAN tambahkan info yang tidak ditanyakan.
+
+4. JANGAN gunakan frasa "adalah sebagai berikut:", "berdasarkan", "sesuai dengan".
+
+5. Jika informasi ada di konteks, JAWAB. Hanya jawab "tidak ditemukan" jika konteks BENAR-BENAR tidak mengandung informasi relevan.
+
+JAWABAN:"""
+
+HUMAN_PROMPT_WITH_HISTORY ="""KONTEKS DOKUMEN:
 {context}
 
 ---
 
 PERTANYAAN: {question}
 
-Jawablah secara langsung, padat, dan akurat sesuai konteks di atas."""
+INSTRUKSI JAWABAN:
+- Jawab LANGSUNG dan FOKUS pada pertanyaan (target: 15-25 kata untuk faktual, 30-50 kata untuk prosedural).
+- Sertakan detail relevan yang LANGSUNG menjawab pertanyaan, tapi JANGAN elaborasi berlebihan.
+- Gunakan format yang sesuai: paragraf untuk penjelasan, poin-poin untuk daftar.
+- Jangan sertakan referensi sumber, nomor dokumen, atau sitasi apapun.
+- VALIDASI: Pastikan jawaban FOKUS dan setiap informasi ADA di konteks."""
 
 CONVERSATIONAL_PROMPT = """Riwayat percakapan kita sejauh ini:
 
@@ -106,32 +132,71 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
             content = str(doc)
             meta = {}
 
-        doc_type = meta.get("doc_type") or meta.get("section") or "dokumen"
-        department = meta.get("department", "")
-        filename = meta.get("filename", "")
+        # Sesuaikan dengan struktur data parent_chunk_kkp.json dan parent_chunk_pi.json
+        section = meta.get("section", "")
         title = meta.get("title", "")
+        parent_id = meta.get("parent_id", "")
+        source = meta.get("source", "")
+        child_ids = meta.get("child_ids", [])
         matched_children = meta.get("matched_children", [])
 
+        # Build header
         header = f"[Dokumen {i}]"
-        if doc_type:
-            header += f" Tipe: {str(doc_type).upper()}"
         if title:
-            header += f" | Judul: {title}"
-        if department:
-            header += f" | Departemen: {department}"
-        if filename:
-            header += f" | Sumber: {filename}"
+            header += f" {title}"
+        if section:
+            header += f" | Bagian: {section}"
+        if source:
+            header += f" | Sumber: {source}"
 
         score = meta.get("cross_encoder_score")
         if score is not None:
             header += f" | Relevansi: {score:.2f}"
 
         if matched_children:
-            header += f" | Child: {', '.join(matched_children)}"
+            header += f" | Child Chunks: {len(matched_children)}"
 
         formatted_parts.append(f"{header}\n{content}")
 
     return "\n\n---\n\n".join(formatted_parts)
+
+
+def _postprocess_answer(answer: str) -> str:
+    """
+    Remove preambles and meta-references that hurt Answer Relevancy.
+    
+    This is a safety net - the prompt should prevent these, but this catches what slips through.
+    
+    Args:
+        answer: Raw answer from LLM
+        
+    Returns:
+        Cleaned answer with preambles and meta-references removed
+    """
+    # Strip leading whitespace/newlines
+    answer = answer.strip()
+    
+    # Remove common preamble patterns
+    preamble_patterns = [
+        r'^Berdasarkan (?:dokumen|panduan|konteks)[^,]*,\s*',
+        r'^Menurut (?:dokumen|panduan)[^,]*,\s*',
+        r'^Sesuai dengan (?:dokumen|panduan)[^,]*,\s*',
+        r'^Dalam (?:dokumen|panduan)[^,]*,\s*',
+    ]
+    for pattern in preamble_patterns:
+        answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
+    
+    # Remove "adalah sebagai berikut:" and just keep the content after it
+    answer = re.sub(r'^[^:]*adalah sebagai berikut\s*:\s*\n?', '', answer, flags=re.IGNORECASE)
+    
+    # Remove BAB/Dokumen references inline
+    answer = re.sub(r'\b(?:BAB\s+[IVX]+|Dokumen\s+\d+)\b', '', answer)
+    
+    # Clean up extra whitespace
+    answer = re.sub(r'\n{3,}', '\n\n', answer)
+    answer = re.sub(r'  +', ' ', answer)
+    
+    return answer.strip()
 
 
 def _build_sources(context_documents: list[Document] | list[dict] | str, limit: int = 3) -> list[dict]:
@@ -150,13 +215,16 @@ def _build_sources(context_documents: list[Document] | list[dict] | str, limit: 
         else:
             continue
 
+        # Sesuaikan dengan struktur data yang ada
         sources.append(
             {
-                "filename": meta.get("filename", ""),
-                "doc_type": meta.get("doc_type", meta.get("section", "")),
-                "department": meta.get("department", ""),
+                "parent_id": meta.get("parent_id", ""),
+                "title": meta.get("title", ""),
+                "section": meta.get("section", ""),
+                "source": meta.get("source", ""),
                 "relevance_score": meta.get("cross_encoder_score"),
                 "chunk_preview": (content[:200] + "...") if content else "",
+                "matched_children": meta.get("matched_children", []),
             }
         )
 
@@ -177,7 +245,7 @@ def build_rag_chain(streaming: bool = False):
         model=settings.llm_model,
         api_key=settings.open_api_key,
         temperature=0,
-        max_tokens=1500,
+        max_tokens=600,  # Reduced from 1200 to force conciseness (FASE 4)
         streaming=streaming,
     )
 
@@ -240,6 +308,9 @@ class RAGChain:
             "context": context_documents,
             "question": question,
         })
+        
+        # Apply post-processing to remove preambles and meta-references (FASE 4)
+        answer = _postprocess_answer(answer)
 
         result: dict[str, str | list] = {"answer": answer}
 
@@ -412,6 +483,9 @@ def generate_answer(question: str, context: str) -> str:
         "context": context,
         "question": question,
     })
+    
+    # Apply post-processing to remove preambles and meta-references (FASE 4)
+    answer = _postprocess_answer(answer)
 
     logger.info(f"Answer generated: {len(answer)} chars")
     return answer
