@@ -38,10 +38,10 @@ class Settings(BaseSettings):
     table_child_chunks: str = "child_documents"
 
     # ── Retrieval ───────────────────────────────────────────
-    retrieval_top_k: int = Field(default=10, description="Jumlah kandidat dari hybrid search")
-    rerank_top_n: int = Field(default=3, description="Jumlah dokumen setelah reranking")
-    bm25_weight: float = Field(default=0.2, ge=0.0, le=1.0)
-    dense_weight: float = Field(default=0.8, ge=0.0, le=1.0)
+    retrieval_top_k: int = Field(default=30, description="Jumlah kandidat dari hybrid search (sudah optimal)")
+    rerank_top_n: int = Field(default=8, description="Jumlah dokumen setelah reranking (dinaikkan dari 6 ke 8 untuk lebih banyak konteks)")
+    bm25_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Bobot BM25 dinaikkan untuk keyword matching yang lebih kuat")
+    dense_weight: float = Field(default=0.6, ge=0.0, le=1.0, description="Bobot dense search (diturunkan untuk balance dengan BM25)")
 
     # ── Evaluasi ────────────────────────────────────────────
     ragas_sample_size: int = Field(default=50, ge=10, le=500)

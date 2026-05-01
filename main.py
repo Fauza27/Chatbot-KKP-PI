@@ -203,7 +203,10 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
     logger.info("TAHAP 5: Prompt Engineering + LLM Generation")
     logger.info("=" * 60)
 
-    context_str = fetcher.format_context(reranked_parents)
+    # FASE 4: Use _format_context from chain.py instead of fetcher.format_context()
+    # to avoid metadata leakage (BAB references) that hurt Answer Relevancy
+    from src.generation.chain import _format_context
+    context_str = _format_context(reranked_parents)
     contexts_list = [p["content"] for p in reranked_parents]
 
     if debug:
@@ -285,6 +288,25 @@ def run_eval(dataset: str = "pi") -> None:
 
     scores = run_evaluation(pipeline_fn=pipeline_fn, eval_data=eval_data)
     logger.info(f"Evaluation scores: {scores}")
+
+
+def run_eval_no_gt(dataset: str = "both") -> None:
+    """Evaluasi TANPA ground truth - lebih objektif"""
+    from src.evaluation.ragas_eval_no_gt import run_full_evaluation_no_gt
+    
+    logger.info(f"🚀 Starting evaluation WITHOUT ground truth for {dataset} dataset...")
+    
+    def pipeline_fn(question: str):
+        """Wrapper untuk RAG pipeline"""
+        result = run_rag_pipeline(question, debug=False)
+        return result["answer"], result["contexts"]
+    
+    results, filename = run_full_evaluation_no_gt(pipeline_fn, dataset=dataset)
+    
+    logger.info(f"\n✅ Evaluation complete!")
+    logger.info(f"📄 Results saved to: {filename}")
+    logger.info(f"📊 Overall Score: {results['scores']['overall']:.4f}")
+    logger.info(f"🎯 All Pass: {'✅ YES' if results['all_pass'] else '❌ NO'}")
 
 
 # ── Helper print ─────────────────────────────────────────────
@@ -447,7 +469,12 @@ Contoh penggunaan:
     parser.add_argument(
         "--evaluate",
         action="store_true",
-        help="Jalankan evaluasi RAGAS pada pipeline",
+        help="Jalankan evaluasi RAGAS pada pipeline (dengan ground truth)",
+    )
+    parser.add_argument(
+        "--evaluate-no-gt",
+        action="store_true",
+        help="Jalankan evaluasi RAGAS TANPA ground truth (lebih objektif)",
     )
     parser.add_argument(
         "--debug",
@@ -473,6 +500,8 @@ Contoh penggunaan:
         run_ingest(args.dataset)
     elif args.evaluate:
         run_eval(dataset=args.dataset)
+    elif args.evaluate_no_gt:
+        run_eval_no_gt(dataset=args.dataset)
     elif args.question:
         result = run_rag_pipeline(args.question, debug=args.debug)
         print("\n" + "─" * 60)
