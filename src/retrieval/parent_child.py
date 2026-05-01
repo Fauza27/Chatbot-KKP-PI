@@ -89,9 +89,10 @@ class ParentChildFetcher:
 
         return parents
 
-    def format_context(self, parents: list[dict], max_parents: int = 5) -> str:
+    def format_context(self, parents: list[dict], max_parents: int = 10) -> str:
         """
         Format parent chunks into context string for LLM.
+        Dinaikkan dari 5 ke 10 untuk memberikan konteks lebih kaya dan coverage lebih baik.
         """
         if not parents:
             return "No context found."

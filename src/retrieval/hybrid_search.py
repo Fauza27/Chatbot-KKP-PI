@@ -12,6 +12,7 @@ from rank_bm25 import BM25Okapi
 from supabase import Client, create_client
 
 from config.settings import get_settings
+from src.retrieval.query_expansion import expand_query_smart
 
 settings = get_settings()
 
@@ -105,19 +106,27 @@ class HybridSearcher:
         query: str,
         filters: dict[str, str] | None = None,
         top_k: int | None = None,
+        enable_query_expansion: bool = True,
     ) -> list[HybridSearchResult]:
         """Run hybrid search: dense → BM25 re-scoring → RRF."""
         k = top_k or settings.retrieval_top_k
         filters = filters or {}
 
-        logger.info(f"Hybrid search: '{query}' | filters: {filters} | top_k: {k}")
+        # Apply query expansion for better recall
+        original_query = query
+        if enable_query_expansion:
+            query = expand_query_smart(query, enable_expansion=True)
+            if query != original_query:
+                logger.info(f"Query expansion applied: '{original_query}' → '{query[:100]}...'")
+
+        logger.info(f"Hybrid search: '{original_query}' | filters: {filters} | top_k: {k}")
 
         query_embedding = self._embedder.embed_query(query)
 
         rpc_params: dict[str, Any] = {
             "query_embedding": query_embedding,
             "query_text": query,
-            "match_count": k * 2,
+            "match_count": k * 4,  # Dinaikkan dari k*2 ke k*4 untuk coverage maksimal
             "fts_weight": settings.bm25_weight,
             "vector_weight": settings.dense_weight,
             "rrf_k": 60,
