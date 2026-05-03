@@ -1,6 +1,5 @@
 """
 RAGAS Evaluation WITHOUT Ground Truth
-Menggunakan metrik yang tidak memerlukan reference answer
 """
 
 from datasets import Dataset
@@ -21,9 +20,9 @@ from typing import List, Dict
 from config.settings import get_settings
 
 
-# ============================================================================
+#
 # EVALUATION QUESTIONS (TANPA GROUND TRUTH)
-# ============================================================================
+#
 
 EVAL_QUESTIONS_PI = [
     "Apa syarat SKS minimal untuk mengambil Penulisan Ilmiah (PI)?",
@@ -126,9 +125,9 @@ EVAL_QUESTIONS_KKP = [
 ]
 
 
-# ============================================================================
+#
 # EVALUATION FUNCTIONS
-# ============================================================================
+#
 
 def evaluate_rag_no_ground_truth(
     questions: List[str],
@@ -136,18 +135,6 @@ def evaluate_rag_no_ground_truth(
     contexts: List[List[str]],
     dataset_name: str = "both"
 ) -> Dict:
-    """
-    Evaluate RAG system WITHOUT ground truth
-    
-    Args:
-        questions: List of questions
-        answers: List of generated answers
-        contexts: List of retrieved contexts (list of lists)
-        dataset_name: Name of dataset (pi, kkp, or both)
-    
-    Returns:
-        Dictionary containing evaluation results
-    """
     
     logger.info(f"Starting RAGAS evaluation (NO GROUND TRUTH) for {dataset_name} dataset...")
     logger.info(f"Number of questions: {len(questions)}")
@@ -181,7 +168,6 @@ def evaluate_rag_no_ground_truth(
     )
     
     # Define metrics (NO GROUND TRUTH REQUIRED)
-    # Instantiate context precision without reference
     context_precision_no_ref = LLMContextPrecisionWithoutReference(llm=evaluator_llm)
     
     metrics = [
@@ -205,7 +191,6 @@ def evaluate_rag_no_ground_truth(
     
     # Extract scores with safe conversion (handle list results)
     def _safe_score(value) -> float:
-        """Convert metric result to float, handling lists and NaN values"""
         import math
         from statistics import mean
         
@@ -290,7 +275,6 @@ def evaluate_rag_no_ground_truth(
 
 
 def save_evaluation_results(results: Dict, filename: str = None):
-    """Save evaluation results to JSON file"""
     
     if filename is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -303,21 +287,11 @@ def save_evaluation_results(results: Dict, filename: str = None):
     return filename
 
 
-# ============================================================================
+#
 # MAIN EVALUATION FUNCTION
-# ============================================================================
+#
 
 def run_full_evaluation_no_gt(rag_pipeline_func, dataset: str = "both"):
-    """
-    Run full evaluation WITHOUT ground truth
-    
-    Args:
-        rag_pipeline_func: Function that takes a question and returns (answer, contexts)
-        dataset: "pi", "kkp", or "both"
-    
-    Returns:
-        Evaluation results dictionary
-    """
     
     # Select questions based on dataset
     if dataset == "pi":

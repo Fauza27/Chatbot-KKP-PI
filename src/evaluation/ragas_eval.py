@@ -24,7 +24,7 @@ from loguru import logger
 from config.settings import get_settings
 
 
-# ── Threshold targets ───────────────────────────────────────────
+# Threshold targets
 THRESHOLD_TARGETS = {
     "faithfulness": 0.85,
     "answer_relevancy": 0.85,
@@ -37,11 +37,10 @@ THRESHOLD_TARGETS = {
 METRIC_NAMES = list(THRESHOLD_TARGETS.keys())
 
 
-
-# ── Evaluation Dataset ──────────────────────────────────────────
+# Evaluation Dataset
 # Mendukung evaluasi untuk PI dan KKP
 EVAL_QUESTIONS_PI = [
-    # ── Syarat & Ketentuan ──────────────────────────────────────
+    # Syarat & Ketentuan
     {
         "question": "Apa syarat SKS minimal untuk mengambil Penulisan Ilmiah (PI)?",
         "ground_truth": "Minimal 100 SKS dengan IPK minimal 2,00.",
@@ -931,21 +930,6 @@ def run_evaluation(
     eval_data: list[dict] | None = None,
     output_path: str | None = None,
 ) -> dict:
-    """
-    Jalankan evaluasi RAGAS pada pipeline RAG.
-
-    Menggunakan RAGAS v0.4.x API (SingleTurnSample + EvaluationDataset).
-    Semua 6 metrik di-enforce dengan threshold 85%.
-
-    Args:
-        pipeline_fn: Fungsi yang menerima question (str) dan mengembalikan
-                    dict {"answer": str, "contexts": list[str]}
-        eval_data: List of evaluation dicts (default: EVAL_QUESTIONS_PI)
-        output_path: Path untuk menyimpan hasil (default: auto-generate)
-
-    Returns:
-        Dict berisi skor RAGAS per metrik + diagnostik
-    """
     settings = get_settings()
     eval_data = eval_data or EVAL_QUESTIONS_PI
 
