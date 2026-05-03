@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ValidationInfo
 
 
 def _find_env_file() -> str:
@@ -24,37 +25,56 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── OpenAI ──────────────────────────────────────────────
+    APP_NAME: str = "Chatbot KKP/PI Assistant"
+    VERSION: str = "1.0.0"
+    ENVIRONMENT: str = "development"
+
+    # OpenAI
     open_api_key: str
     llm_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-large"
 
-    # ── Supabase ────────────────────────────────────────────
+    # Supabase
     supabase_url: str
     supabase_service_key: str
 
-    # ── Database Tables ─────────────────────────────────────
+    # Database Tables
     table_parent_chunks: str = "parent_documents"
     table_child_chunks: str = "child_documents"
 
-    # ── Retrieval ───────────────────────────────────────────
-    retrieval_top_k: int = Field(default=30, description="Jumlah kandidat dari hybrid search (sudah optimal)")
-    rerank_top_n: int = Field(default=8, description="Jumlah dokumen setelah reranking (dinaikkan dari 6 ke 8 untuk lebih banyak konteks)")
-    bm25_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Bobot BM25 dinaikkan untuk keyword matching yang lebih kuat")
-    dense_weight: float = Field(default=0.6, ge=0.0, le=1.0, description="Bobot dense search (diturunkan untuk balance dengan BM25)")
+    # Retrieval
+    retrieval_top_k: int = Field(default=30)
+    rerank_top_n: int = Field(default=8)
+    bm25_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    dense_weight: float = Field(default=0.6, ge=0.0, le=1.0)
 
-    # ── Evaluasi ────────────────────────────────────────────
+    # Evaluasi
     ragas_sample_size: int = Field(default=50, ge=10, le=500)
 
-    # ── Cross-Encoder ───────────────────────────────────────
+    # Cross-Encoder
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-    # ── Hugging Face ───────────────────────────────────────
+    # Hugging Face
     hf_token: str | None = None
 
-    # ── Logging ─────────────────────────────────────────────
+    # Logging
     log_level: str = "INFO"
 
+    # Telegram
+    TELEGRAM_BOT_TOKEN: str
+    TELEGRAM_WEBHOOK_URL: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    TELEGRAM_WEBHOOK_PATH: str = "/api/telegram/webhook"
+
+
+@field_validator("TELEGRAM_WEBHOOK_SECRET", mode='after')
+@classmethod
+def validate_webhook_secret(cls, value: str, info: ValidationInfo) -> str:
+    env = info.data.get("ENVIRONMENT", "development")
+    if env == "production" and info.data.get("TELEGRAM_WEBHOOK_URL"):
+        if not value or len(value) < 16:
+            raise ValueError("TELEGRAM_WEBHOOK_SECRET is required and must be at least 16 chars in production")
+    return value
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

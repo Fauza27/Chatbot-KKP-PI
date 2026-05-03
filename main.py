@@ -1,11 +1,7 @@
 """
-Entry point utama: jalankan RAG pipeline secara interaktif.
-
-Mengorkestrasi semua komponen:
-Self-Query → Hybrid Search → Parent-Child → Reranking → Generation
-
 Penggunaan:
-    python main.py
+    python main.py                                      # Start FastAPI server (REST API + Telegram Bot)
+    python main.py --cli                                # Mode CLI interaktif
     python main.py --question "Apa syarat untuk mengambil PI?"
     python main.py --ingest
     python main.py --evaluate
@@ -15,14 +11,14 @@ Penggunaan:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from loguru import logger
+import uvicorn
 
 from config.settings import get_settings
 
-
-# ── Konfigurasi Logger ─────────────────────────────────────────
 def setup_logger(debug: bool = False) -> None:
     """Setup loguru logger."""
     logger.remove()
@@ -49,25 +45,7 @@ def setup_logger(debug: bool = False) -> None:
             ),
         )
 
-
-# ── Pipeline RAG ──────────────────────────────────────────────
 def run_rag_pipeline(question: str, debug: bool = False) -> dict:
-    """
-    Jalankan seluruh pipeline RAG untuk satu pertanyaan.
-
-    Pipeline:
-    1. Self-Query Extraction (metadata filter via heuristik + LLM)
-    2. Hybrid Search (BM25 + Dense via pgvector + RRF)
-    3. Parent-Child Fetching (child → parent lookup)
-    4. Cross-Encoder Reranking (top-N most relevant)
-    5. Prompt Engineering + GPT (generate answer)
-
-    Returns:
-        Dict berisi:
-        - answer: Jawaban dari LLM
-        - contexts: List of context strings (untuk evaluasi RAGAS)
-        - metadata: Dict detail setiap tahap pipeline
-    """
     from src.retrieval.self_query import extract_query_components
     from src.retrieval.hybrid_search import HybridSearcher
     from src.retrieval.parent_child import ParentChildFetcher
@@ -76,7 +54,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
 
     metadata: dict = {}
 
-    # ── TAHAP 1: Self-Query ─────────────────────────────────
     logger.info("=" * 60)
     logger.info("TAHAP 1: Self-Query Extraction")
     logger.info("=" * 60)
@@ -94,7 +71,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
         logger.debug(f"  Query semantik: {parsed.semantic_query}")
         logger.debug(f"  Filters       : {parsed.filters}")
 
-    # ── TAHAP 2: Hybrid Search ──────────────────────────────
     logger.info("=" * 60)
     logger.info("TAHAP 2: Hybrid Search (BM25 + Dense + RRF)")
     logger.info("=" * 60)
@@ -140,7 +116,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
             "metadata": metadata,
         }
 
-    # ── TAHAP 3: Parent-Child Fetching ──────────────────────
     logger.info("=" * 60)
     logger.info("TAHAP 3: Parent-Child Fetching")
     logger.info("=" * 60)
@@ -167,7 +142,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
                 f"children={p.get('matched_children', [])}"
             )
 
-    # ── TAHAP 4: Cross-Encoder Reranking ────────────────────
     logger.info("=" * 60)
     logger.info("TAHAP 4: Cross-Encoder Reranking")
     logger.info("=" * 60)
@@ -198,13 +172,10 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
                 f"{p['title'][:50]}"
             )
 
-    # ── TAHAP 5: Format Context + Generate Answer ───────────
     logger.info("=" * 60)
     logger.info("TAHAP 5: Prompt Engineering + LLM Generation")
     logger.info("=" * 60)
 
-    # FASE 4: Use _format_context from chain.py instead of fetcher.format_context()
-    # to avoid metadata leakage (BAB references) that hurt Answer Relevancy
     from src.generation.chain import _format_context
     context_str = _format_context(reranked_parents)
     contexts_list = [p["content"] for p in reranked_parents]
@@ -227,9 +198,7 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
     }
 
 
-# ── Mode: Ingestion ──────────────────────────────────────────
 def run_ingest(dataset: str = "both") -> None:
-    """Jalankan pipeline ingestion: load JSON → embed → upsert ke Supabase."""
     from src.ingestion.embedder import run_ingestion
 
     project_root = Path(__file__).resolve().parent
@@ -265,7 +234,6 @@ def run_ingest(dataset: str = "both") -> None:
         ingest_one(dataset)
 
 
-# ── Mode: Evaluasi ────────────────────────────────────────────
 def run_eval(dataset: str = "pi") -> None:
     from src.evaluation.ragas_eval import (
         run_evaluation,
@@ -291,7 +259,6 @@ def run_eval(dataset: str = "pi") -> None:
 
 
 def run_eval_no_gt(dataset: str = "both") -> None:
-    """Evaluasi TANPA ground truth - lebih objektif"""
     from src.evaluation.ragas_eval_no_gt import run_full_evaluation_no_gt
     
     logger.info(f"🚀 Starting evaluation WITHOUT ground truth for {dataset} dataset...")
@@ -309,8 +276,6 @@ def run_eval_no_gt(dataset: str = "both") -> None:
     logger.info(f"🎯 All Pass: {'✅ YES' if results['all_pass'] else '❌ NO'}")
 
 
-# ── Helper print ─────────────────────────────────────────────
-# FIX: dipindah ke sini agar tersedia sebelum run_interactive dipanggil
 def _print_answer(answer: str, num_docs: int) -> None:
     print("─" * 60)
     print("💡 JAWABAN:")
@@ -321,8 +286,6 @@ def _print_answer(answer: str, num_docs: int) -> None:
         print(f"📚 Sumber: {num_docs} dokumen digunakan")
 
 
-# ── Mode: Interaktif ─────────────────────────────────────────
-# FIX: definisi duplikat dihapus — hanya ada SATU fungsi run_interactive
 def run_interactive(debug: bool = False) -> None:
     from src.generation.memory import ConversationMemory, IntentType
     from src.generation.intent_classifier import IntentClassifier, reformulate_query
@@ -433,14 +396,14 @@ def run_interactive(debug: bool = False) -> None:
         print()
 
 
-# ── Main ──────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="RAG Chatbot - Panduan KKP/PI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Contoh penggunaan:
-  python main.py                                    # mode interaktif
+  python main.py                                    # start FastAPI server (REST API + Telegram Bot)
+  python main.py --cli                              # mode CLI interaktif
   python main.py --question "Apa syarat PI?"        # single question
   python main.py --ingest --dataset both            # ingest data KKP + PI
   python main.py --ingest --dataset pi              # ingest data PI
@@ -450,6 +413,11 @@ Contoh penggunaan:
         """,
     )
 
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Jalankan mode CLI interaktif",
+    )
     parser.add_argument(
         "--question", "-q",
         type=str,
@@ -509,8 +477,27 @@ Contoh penggunaan:
         print("─" * 60)
         print(result["answer"])
         print("─" * 60)
-    else:
+    elif args.cli:
         run_interactive(debug=args.debug)
+    else:
+        # Default: Start FastAPI server
+        port = int(os.environ.get("PORT", 8000))
+        is_reload = settings.ENVIRONMENT == "development"
+        
+        logger.info(f"Starting FastAPI server on port {port}")
+        logger.info(f"Environment: {settings.ENVIRONMENT}")
+        logger.info(f"Reload mode: {'enabled' if is_reload else 'disabled'}")
+        
+        project_root = Path(__file__).resolve().parent
+        
+        uvicorn.run(
+            "application:create_app",
+            host="0.0.0.0",
+            port=port,
+            reload=is_reload,
+            factory=True,
+            reload_dirs=[str(project_root)] if is_reload else None,
+        )
 
 
 if __name__ == "__main__":
