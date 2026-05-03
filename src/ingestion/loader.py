@@ -4,9 +4,6 @@ from loguru import logger
 
 
 def load_child_chunks(path: str | Path) -> list[dict]:
-    """
-    load child chunks from json file
-    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Child chunks file not found: {path}")
@@ -36,9 +33,6 @@ def load_child_chunks(path: str | Path) -> list[dict]:
 
 
 def load_parent_chunks(path: str | Path) -> list[dict]:
-    """
-    load parent chunks from json file
-    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Parent chunks file not found: {path}")
@@ -70,10 +64,6 @@ def load_parent_chunks(path: str | Path) -> list[dict]:
 def validate_parent_child_links(
     parents: list[dict], children: list[dict]
 ) -> bool:
-    """
-    validate that all child_ids in parent refer to existing child chunks,
-    and all child chunks have valid parents.
-    """
     child_ids_set = {c["id"] for c in children}
     parent_ids_set = {p["parent_id"] for p in parents}
 

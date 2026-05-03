@@ -8,13 +8,11 @@ from config.settings import get_settings
 
 
 def _get_supabase_client() -> Client:
-    """Init Supabase client."""
     settings = get_settings()
     return create_client(settings.supabase_url, settings.supabase_service_key)
 
 
 def _get_openai_client() -> OpenAI:
-    """init OpenAI client."""
     settings = get_settings()
     return OpenAI(api_key=settings.open_api_key)
 
@@ -24,9 +22,6 @@ def get_openai_embeddings(
     model: str | None = None,
     batch_size: int = 20,
 ) -> list[list[float]]:
-    """
-    Generate embeddings for list of texts using OpenAI API.
-    """
     settings = get_settings()
     client = _get_openai_client()
     model = model or settings.embedding_model
@@ -56,11 +51,6 @@ def get_openai_embeddings(
 
 
 def _build_metadata_json(child: dict) -> dict:
-    """
-    Build metadata JSONB from child chunk dict.
-    This metadata is stored in the Supabase JSONB column to be compatible
-    with LangChain SupabaseVectorStore + SelfQueryRetriever.
-    """
     return {
         "parent_id": child.get("parent_id", ""),
         "title": child.get("title", ""),
@@ -71,10 +61,6 @@ def _build_metadata_json(child: dict) -> dict:
 
 
 def upsert_parent_chunks(parents: list[dict]) -> int:
-    """
-    Insert parent chunks to parent_documents table in Supabase.
-    Idempotent: skip if parent_id already exists.
-    """
     supabase = _get_supabase_client()
     settings = get_settings()
     table = settings.table_parent_chunks
@@ -108,11 +94,6 @@ def upsert_child_chunks_with_embeddings(
     embeddings: list[list[float]],
     child_to_parent_map: dict[str, str],
 ) -> int:
-    """
-    Insert child chunks + embedding vectors to child_documents table in Supabase.
-    Also stores metadata as JSONB for LangChain compatibility.
-    Idempotent: skip if child id already exists.
-    """
     if len(children) != len(embeddings):
         raise ValueError(
             f"Number of children ({len(children)}) != number of embeddings ({len(embeddings)})"
@@ -172,9 +153,6 @@ def upsert_child_chunks_with_embeddings(
 
 
 def build_child_to_parent_map(parents: list[dict]) -> dict[str, str]:
-    """
-    Build child_id → parent_id mapping from parent chunks.
-    """
     mapping = {}
     for parent in parents:
         for child_id in parent["child_ids"]:
@@ -186,13 +164,6 @@ def run_ingestion(
     child_chunks_path: str,
     parent_chunks_path: str,
 ) -> dict:
-    """
-    Run full ingestion pipeline:
-    1. Load child & parent chunks from JSON
-    2. Embed child chunks via OpenAI
-    3. Upsert parent chunks to Supabase
-    4. Upsert child chunks + embeddings to Supabase
-    """
     from src.ingestion.loader import (
         load_child_chunks,
         load_parent_chunks,
