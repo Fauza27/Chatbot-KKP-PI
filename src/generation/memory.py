@@ -71,8 +71,7 @@ class ConversationMemory:
 
         lines = []
         for turn in self._turns[:-1]:
-            # FIX: prefix sudah berisi spasi dan label lengkap,
-            # tidak perlu tambah ": " lagi di f-string
+            # FIX: prefix sudah berisi spasi dan label lengkap
             prefix = "User" if turn.role == "user" else "Assistant"
             content = (
                 turn.content[:200] + "..."

@@ -14,10 +14,7 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-# ─────────────────────────────────────────────────────────────────────────────
 # SYSTEM PROMPT
-# Menentukan persona, kapabilitas, dan constraint LLM
-# ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """Anda adalah asisten akademik STMIK Widya Cipta Dharma.
 
 ATURAN UTAMA:
@@ -104,15 +101,6 @@ dan riwayat percakapan. Konsisten dengan jawaban sebelumnya."""
 
 
 def _format_context(documents: list[Document] | list[dict] | str) -> str:
-    """
-    Format dokumen menjadi string konteks yang terstruktur.
-
-    Args:
-        documents: list[Document], list[dict], atau string konteks siap pakai
-
-    Returns:
-        String konteks yang siap dimasukkan ke prompt
-    """
     if isinstance(documents, str):
         return documents if documents.strip() else "Tidak ada dokumen konteks yang tersedia."
 
@@ -162,17 +150,6 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
 
 
 def _postprocess_answer(answer: str) -> str:
-    """
-    Remove preambles and meta-references that hurt Answer Relevancy.
-    
-    This is a safety net - the prompt should prevent these, but this catches what slips through.
-    
-    Args:
-        answer: Raw answer from LLM
-        
-    Returns:
-        Cleaned answer with preambles and meta-references removed
-    """
     # Strip leading whitespace/newlines
     answer = answer.strip()
     
@@ -232,20 +209,11 @@ def _build_sources(context_documents: list[Document] | list[dict] | str, limit: 
 
 
 def build_rag_chain(streaming: bool = False):
-    """
-    Bangun RAG chain menggunakan LangChain Expression Language (LCEL).
-
-    Args:
-        streaming: Jika True, chain mendukung .stream() untuk streaming output
-
-    Returns:
-        LCEL Runnable chain
-    """
     llm = ChatOpenAI(
         model=settings.llm_model,
         api_key=settings.open_api_key,
         temperature=0,
-        max_tokens=600,  # Reduced from 1200 to force conciseness (FASE 4)
+        max_tokens=600,  # Reduced from 1200 to force conciseness
         streaming=streaming,
     )
 
@@ -270,10 +238,6 @@ def build_rag_chain(streaming: bool = False):
 
 
 class RAGChain:
-    """
-    High-level wrapper untuk RAG chain.
-    Mendukung single-turn (stateless) dan multi-turn (dengan history).
-    """
 
     def __init__(self):
         self._chain = build_rag_chain(streaming=False)
@@ -291,17 +255,6 @@ class RAGChain:
         context_documents: list[Document] | list[dict] | str,
         return_sources: bool = True,
     ) -> dict[str, str | list]:
-        """
-        Single-turn RAG invocation (stateless).
-
-        Args:
-            question: Pertanyaan dari user
-            context_documents: Dokumen konteks (parent chunks setelah reranking)
-            return_sources: Sertakan info sumber dalam response
-
-        Returns:
-            {"answer": str, "sources": list[dict]}
-        """
         logger.info(f"Generating RAG answer: '{question[:80]}'")
 
         answer = self._chain.invoke({
@@ -309,7 +262,7 @@ class RAGChain:
             "question": question,
         })
         
-        # Apply post-processing to remove preambles and meta-references (FASE 4)
+        # Apply post-processing to remove preambles and meta-references
         answer = _postprocess_answer(answer)
 
         result: dict[str, str | list] = {"answer": answer}
@@ -332,9 +285,6 @@ class RAGChain:
         conversation_history: list[dict],
         return_sources: bool = True,
     ) -> dict[str, str | list]:
-        """
-        Multi-turn RAG invocation — menyertakan conversation history.
-        """
         from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
         logger.info(
@@ -376,9 +326,6 @@ class RAGChain:
         question: str,
         conversation_history: list[dict],
     ) -> dict[str, str | list]:
-        """
-        Jawab pertanyaan conversational TANPA retrieval — hanya dari history.
-        """
         from langchain_core.messages import HumanMessage, SystemMessage
 
         logger.info(f"Conversational mode (tanpa retrieval): '{question[:60]}'")
@@ -408,9 +355,6 @@ class RAGChain:
         conversation_history: list[dict],
         last_context_docs_text: list[str],
     ) -> dict[str, str | list]:
-        """
-        Jawab pertanyaan klarifikasi menggunakan konteks dokumen SEBELUMNYA.
-        """
         from langchain_core.messages import HumanMessage, SystemMessage
 
         logger.info(f"Clarification mode (pakai konteks lama): '{question[:60]}'")
@@ -452,7 +396,6 @@ class RAGChain:
         question: str,
         context_documents: list[Document] | list[dict] | str,
     ) -> Iterator[str]:
-        """Stream jawaban token per token untuk UI real-time."""
         for chunk in self._streaming_chain.stream({
             "context": context_documents,
             "question": question,
@@ -463,7 +406,6 @@ class RAGChain:
 _rag_chain_instance: object | None = None
 
 def _get_rag_chain():
-    """Lazy singleton untuk RAG chain."""
     global _rag_chain_instance
     if _rag_chain_instance is None:
         _rag_chain_instance = build_rag_chain(streaming=False)
@@ -471,9 +413,6 @@ def _get_rag_chain():
 
 
 def generate_answer(question: str, context: str) -> str:
-    """
-    Generate jawaban untuk pertanyaan berdasarkan konteks (string).
-    """
     chain = _get_rag_chain() 
 
     logger.info(f"Generating answer untuk: '{question[:80]}...'")
@@ -484,7 +423,7 @@ def generate_answer(question: str, context: str) -> str:
         "question": question,
     })
     
-    # Apply post-processing to remove preambles and meta-references (FASE 4)
+    # Apply post-processing to remove preambles and meta-references
     answer = _postprocess_answer(answer)
 
     logger.info(f"Answer generated: {len(answer)} chars")

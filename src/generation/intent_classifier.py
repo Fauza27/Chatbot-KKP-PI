@@ -44,7 +44,6 @@ def _build_classifier_prompt(
     current_message: str,
     memory: ConversationMemory,
 ) -> str:
-    """build the prompt for intent classifier"""
     parts = []
  
     if not memory.is_empty:
@@ -68,9 +67,6 @@ def _build_classifier_prompt(
     return "\n".join(parts)
 
 class IntentClassifier:
-    """
-    Classifier LLM based for choosing the intent of each user message.
-    """
  
     def __init__(self):
         self._llm = ChatOpenAI(
@@ -86,9 +82,6 @@ class IntentClassifier:
         message: str,
         memory: ConversationMemory,
     ) -> tuple[IntentType, float, str]:
-        """
-        clarifying intent of user message.
-        """
         if len(message.strip()) <= 9 and not any(
             kw in message.lower()
             for kw in ["apa", "bagaimana", "berapa", "kapan", "siapa", "kenapa", "mengapa"]
@@ -164,9 +157,6 @@ def reformulate_query(
     memory: ConversationMemory,
     llm: ChatOpenAI | None = None,
 ) -> str:
-    """
-    write again query for standalone use.
-    """
     if memory.is_empty:
         return message
  
