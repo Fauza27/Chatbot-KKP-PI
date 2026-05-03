@@ -30,6 +30,12 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        
+        # Kirim pesan loading sementara
+        loading_message = await update.message.reply_text(
+            "⏳ Sedang mencari jawaban...",
+            parse_mode=ParseMode.HTML,
+        )
 
         response = chat(
             query=text,
@@ -40,7 +46,29 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if not reply_text:
             reply_text = "Maaf, saya belum bisa menjawab sekarang."
 
-        await update.message.reply_text(
+        sources = response.get("sources", [])
+        if sources:
+            source_text = "\n\n📚 Sumber:\n"
+            for s in sources:
+                section = s.get("section", "")
+                title = s.get("title", "")
+                
+                # Biar rapi, gabungkan section dan title jika beda
+                if section and title and section != title:
+                    source_name = f"{section} — {title}"
+                else:
+                    source_name = title or section or "Buku Panduan"
+                
+                # Cek panduan mana
+                parent_id = s.get("parent_id", "")
+                panduan_type = "PI" if "pi" in parent_id.lower() else "KKP"
+                
+                source_text += f"  • {source_name} (Buku Panduan {panduan_type})\n"
+            
+            reply_text += source_text
+
+        # Update pesan loading dengan jawaban akhir
+        await loading_message.edit_text(
             f"🤖 {reply_text}",
             parse_mode=ParseMode.HTML,
         )
@@ -51,10 +79,15 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     except Exception as exc:
         logger.exception(f"Unexpected error in text chat handler for user {user_id}")
-        await update.message.reply_text(
-            "Maaf, terjadi kesalahan. Silakan coba lagi.",
-            parse_mode=ParseMode.HTML,
-        )
+        error_text = "Maaf, terjadi kesalahan. Silakan coba lagi."
+        
+        try:
+            if 'loading_message' in locals():
+                await loading_message.edit_text(error_text, parse_mode=ParseMode.HTML)
+            else:
+                await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
 
 def build_text_chat_handler() -> MessageHandler:
     return MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_chat)

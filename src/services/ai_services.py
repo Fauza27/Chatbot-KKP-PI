@@ -103,4 +103,15 @@ def _handle_retrieval(question: str, memory: ConversationMemory) -> dict:
         retrieved_doc_contents=[p["content"] for p in reranked_parents],
     )
 
-    return {"answer": answer, "num_docs": len(reranked_parents)}
+    return {
+        "answer": answer,
+        "num_docs": len(reranked_parents),
+        "sources": [
+            {
+                "section": p.get("section", ""),
+                "title": p.get("title", ""),
+                "parent_id": p.get("parent_id", ""),
+            }
+            for p in reranked_parents[:3]
+        ],
+    }
