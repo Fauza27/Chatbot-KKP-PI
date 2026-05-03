@@ -13,11 +13,57 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
+import itertools
+import time
 from pathlib import Path
 from loguru import logger
 import uvicorn
 
 from config.settings import get_settings
+
+class Spinner:
+    def __init__(self, message="Sedang mencari jawaban..."):
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+        self.delay = 0.1
+        self.busy = False
+        self.spinner_visible = False
+        self.message = message
+        sys.stdout.write('\n')
+
+    def write_next(self):
+        with self._screen_lock:
+            if not self.spinner_visible:
+                sys.stdout.write(f"\r{next(self.spinner)} {self.message}")
+                self.spinner_visible = True
+                sys.stdout.flush()
+
+    def remove_spinner(self, cleanup=False):
+        with self._screen_lock:
+            if self.spinner_visible:
+                sys.stdout.write('\r' + ' ' * (len(self.message) + 2) + '\r')
+                self.spinner_visible = False
+                if cleanup:
+                    sys.stdout.write('\r')
+                sys.stdout.flush()
+
+    def spinner_task(self):
+        while self.busy:
+            self.write_next()
+            time.sleep(self.delay)
+            self.remove_spinner()
+
+    def __enter__(self):
+        self._screen_lock = threading.Lock()
+        self.busy = True
+        self.thread = threading.Thread(target=self.spinner_task)
+        self.thread.start()
+
+    def __exit__(self, exception, value, tb):
+        self.busy = False
+        self.remove_spinner(cleanup=True)
+        if self.thread.is_alive():
+            self.thread.join()
 
 def setup_logger(debug: bool = False) -> None:
     """Setup loguru logger."""
@@ -315,78 +361,77 @@ def run_interactive(debug: bool = False) -> None:
             break
 
         memory.add_user_turn(question)
-        print("\n⏳ Sedang mencari jawaban...\n")
-
         try:
-            intent, confidence, reason = classifier.classify(question, memory)
+            with Spinner("Sedang mencari jawaban..."):
+                intent, confidence, reason = classifier.classify(question, memory)
 
-            if debug:
-                logger.debug(
-                    f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}"
-                )
-
-            if intent == IntentType.CONVERSATIONAL:
-                result = rag_chain.invoke_conversational(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                )
-                answer = result["answer"]
-
-            elif intent == IntentType.CLARIFICATION:
-                result = rag_chain.invoke_clarification(
-                    question=question,
-                    conversation_history=memory.get_history_for_llm(),
-                    last_context_docs_text=memory.get_last_retrieved_docs(),
-                )
-                answer = result["answer"]
-
-            else:  # NEEDS_RETRIEVAL
-                from src.retrieval.self_query import extract_query_components
-                from src.retrieval.hybrid_search import HybridSearcher
-                from src.retrieval.parent_child import ParentChildFetcher
-                from src.retrieval.reranker import CrossEncoderReranker
-
-                search_query = reformulate_query(question, memory)
-                parsed = extract_query_components(search_query)
-
-                searcher = HybridSearcher()
-                search_results = searcher.search(
-                    query=parsed.semantic_query,
-                    filters=parsed.filters,
-                )
-
-                if not search_results:
-                    answer = (
-                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
-                        "Silakan konsultasikan dengan Dosen Pembimbing."
-                    )
-                else:
-                    fetcher = ParentChildFetcher()
-                    parent_results = fetcher.fetch_parents(search_results)
-
-                    reranker = CrossEncoderReranker()
-                    reranked_parents = reranker.rerank(
-                        query=question, documents=parent_results
+                if debug:
+                    logger.debug(
+                        f"Intent: {intent.value} (conf={confidence:.2f}) | {reason}"
                     )
 
-                    result = rag_chain.invoke_with_history(
+                if intent == IntentType.CONVERSATIONAL:
+                    result = rag_chain.invoke_conversational(
                         question=question,
-                        context_documents=reranked_parents,
                         conversation_history=memory.get_history_for_llm(),
                     )
                     answer = result["answer"]
 
-                    memory.add_assistant_turn(
-                        content=answer,
-                        retrieved_doc_contents=[p["content"] for p in reranked_parents],
+                elif intent == IntentType.CLARIFICATION:
+                    result = rag_chain.invoke_clarification(
+                        question=question,
+                        conversation_history=memory.get_history_for_llm(),
+                        last_context_docs_text=memory.get_last_retrieved_docs(),
                     )
-                    _print_answer(answer, len(reranked_parents))
-                    print()
-                    continue  # skip generic memory/print below
+                    answer = result["answer"]
 
-            # Untuk CONVERSATIONAL, CLARIFICATION, dan NEEDS_RETRIEVAL (kosong)
-            memory.add_assistant_turn(content=answer)
-            _print_answer(answer, 0)
+                else:  # NEEDS_RETRIEVAL
+                    from src.retrieval.self_query import extract_query_components
+                    from src.retrieval.hybrid_search import HybridSearcher
+                    from src.retrieval.parent_child import ParentChildFetcher
+                    from src.retrieval.reranker import CrossEncoderReranker
+
+                    search_query = reformulate_query(question, memory)
+                    parsed = extract_query_components(search_query)
+
+                    searcher = HybridSearcher()
+                    search_results = searcher.search(
+                        query=parsed.semantic_query,
+                        filters=parsed.filters,
+                    )
+
+                    if not search_results:
+                        answer = (
+                            "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
+                            "Silakan konsultasikan dengan Dosen Pembimbing."
+                        )
+                    else:
+                        fetcher = ParentChildFetcher()
+                        parent_results = fetcher.fetch_parents(search_results)
+
+                        reranker = CrossEncoderReranker()
+                        reranked_parents = reranker.rerank(
+                            query=question, documents=parent_results
+                        )
+
+                        result = rag_chain.invoke_with_history(
+                            question=question,
+                            context_documents=reranked_parents,
+                            conversation_history=memory.get_history_for_llm(),
+                        )
+                        answer = result["answer"]
+
+                        memory.add_assistant_turn(
+                            content=answer,
+                            retrieved_doc_contents=[p["content"] for p in reranked_parents],
+                        )
+                        _print_answer(answer, len(reranked_parents))
+                        print()
+                        continue  # skip generic memory/print below
+
+                # Untuk CONVERSATIONAL, CLARIFICATION, dan NEEDS_RETRIEVAL (kosong)
+                memory.add_assistant_turn(content=answer)
+                _print_answer(answer, 0)
 
         except Exception as e:
             logger.error(f"Error: {e}")
