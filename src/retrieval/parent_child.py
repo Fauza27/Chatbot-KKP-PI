@@ -5,15 +5,10 @@ from loguru import logger
 
 from config.settings import get_settings
 
-# Import tipe dari hybrid search
 from src.retrieval.hybrid_search import HybridSearchResult
 
 
 class ParentChildFetcher:
-    """
-    Take parent chunks from Supabase based on child chunks
-    found by hybrid search.
-    """
 
     def __init__(self, supabase_client: Client | None = None):
         settings = get_settings()
@@ -23,9 +18,6 @@ class ParentChildFetcher:
         self._parent_table = settings.table_parent_chunks
 
     def fetch_parents(self, search_results: list[HybridSearchResult]) -> list[dict]:
-        """
-        Take parent chunks based on HybridSearchResult.
-        """
         if not search_results:
             logger.warning("No search results to fetch parent")
             return []
@@ -90,10 +82,6 @@ class ParentChildFetcher:
         return parents
 
     def format_context(self, parents: list[dict], max_parents: int = 10) -> str:
-        """
-        Format parent chunks into context string for LLM.
-        Dinaikkan dari 5 ke 10 untuk memberikan konteks lebih kaya dan coverage lebih baik.
-        """
         if not parents:
             return "No context found."
 

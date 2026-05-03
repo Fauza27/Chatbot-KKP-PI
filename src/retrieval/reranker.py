@@ -13,7 +13,6 @@ from loguru import logger
 
 
 def _extract_keywords(text: str) -> set[str]:
-    """Extract keywords from text (lowercase, alphanumeric only)"""
     text = text.lower()
     # Remove punctuation, keep alphanumeric and spaces
     text = re.sub(r'[^\w\s]', ' ', text)
@@ -27,10 +26,6 @@ def _extract_keywords(text: str) -> set[str]:
 
 
 def _calculate_keyword_boost(query: str, content: str) -> float:
-    """
-    Calculate keyword matching boost score.
-    Returns a score between 0.0 and 1.0 based on keyword overlap.
-    """
     query_keywords = _extract_keywords(query)
     content_keywords = _extract_keywords(content)
     
@@ -64,26 +59,17 @@ def _calculate_keyword_boost(query: str, content: str) -> float:
 
 
 class CrossEncoderReranker:
-    """
-    Re-rank document using Cross-Encoder model.
-    """
 
     _shared_model: CrossEncoder | None = None
     _shared_model_name: str | None = None
 
     def __init__(self, model_name: str | None = None):
-        """
-        Args:
-            model_name: model name of cross-encoder from HuggingFace.
-                       Default from settings (cross-encoder/ms-marco-MiniLM-L-6-v2)
-        """
         settings = get_settings()
         self.model_name = model_name or settings.cross_encoder_model
         self.top_n = settings.rerank_top_n
         self._model: CrossEncoder | None = None
 
     def _get_model(self) -> CrossEncoder:
-        """Lazy load cross-encoder model."""
         cls = type(self)
         if (
             cls._shared_model is None
@@ -105,20 +91,6 @@ class CrossEncoderReranker:
         enable_keyword_boost: bool = True,
         keyword_boost_weight: float = 0.3,
     ) -> list[dict]:
-        """
-        Re-rank document based on relevance with query using Cross-Encoder.
-        
-        Args:
-            query: Search query
-            documents: List of documents to rerank
-            top_n: Number of top documents to return
-            content_key: Key for document content
-            enable_keyword_boost: Enable keyword matching boost
-            keyword_boost_weight: Weight for keyword boost (0.0-1.0)
-        
-        Returns:
-            Reranked documents with cross_encoder_score
-        """
         if not documents:
             return []
 

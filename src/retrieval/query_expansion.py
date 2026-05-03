@@ -6,18 +6,6 @@ from loguru import logger
 
 
 def expand_query(question: str) -> str:
-    """
-    Expand query untuk meningkatkan recall pada pertanyaan spesifik.
-    
-    Menambahkan kata kunci relevan untuk membantu retrieval menemukan
-    informasi yang tersembunyi atau tidak eksplisit dalam chunks.
-    
-    Args:
-        question: Pertanyaan asli dari user
-        
-    Returns:
-        Query yang sudah di-expand dengan kata kunci tambahan
-    """
     
     question_lower = question.lower()
     expanded = question
@@ -33,20 +21,20 @@ def expand_query(question: str) -> str:
         keywords.extend(["300", "kata", "maksimal", "abstrak", "satu halaman", "ringkas"])
         logger.debug("Query expansion: abstrak maksimal kata")
     
-    # 3. Kata Kunci / Keywords - ENHANCED untuk FASE 3A
+    # 3. Kata Kunci / Keywords
     if any(word in question_lower for word in ["kata kunci", "keyword"]):
         keywords.extend(["3-5", "kata kunci", "keywords", "abstrak", "minimal", "maksimal", "jumlah", "berapa"])
-        logger.debug("Query expansion: kata kunci abstrak (ENHANCED)")
+        logger.debug("Query expansion: kata kunci abstrak")
     
-    # 4. Sampul / Cover - ENHANCED untuk FASE 3A
+    # 4. Sampul / Cover
     if any(word in question_lower for word in ["sampul", "cover", "halaman depan"]):
         keywords.extend(["judul", "nama", "nim", "logo", "program studi", "tahun", "halaman", "sampul", "elemen", "berisi", "fakultas", "universitas", "STMIK", "Widya Cipta Dharma"])
-        logger.debug("Query expansion: elemen sampul (ENHANCED)")
+        logger.debug("Query expansion: elemen sampul")
     
-    # 5. Minimal Halaman - ENHANCED untuk FASE 3A
+    # 5. Minimal Halaman
     if ("minimal" in question_lower or "berapa" in question_lower) and "halaman" in question_lower:
         keywords.extend(["40", "halaman", "minimal", "laporan", "naskah", "jumlah", "tidak termasuk", "lampiran", "KKP", "PI"])
-        logger.debug("Query expansion: minimal halaman (ENHANCED)")
+        logger.debug("Query expansion: minimal halaman")
     
     # 6. Jumlah Referensi
     if any(word in question_lower for word in ["jumlah", "minimal"]) and "referensi" in question_lower:
@@ -134,16 +122,6 @@ def expand_query(question: str) -> str:
 
 
 def expand_query_smart(question: str, enable_expansion: bool = True) -> str:
-    """
-    Smart query expansion dengan toggle.
-    
-    Args:
-        question: Pertanyaan asli
-        enable_expansion: Flag untuk enable/disable expansion
-        
-    Returns:
-        Query yang sudah di-expand (jika enabled) atau query asli
-    """
     
     if not enable_expansion:
         return question

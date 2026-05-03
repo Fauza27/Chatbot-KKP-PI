@@ -9,7 +9,6 @@ from config.settings import get_settings
 settings = get_settings()
 
 def _build_metadata_field_info():
-    """Build metadata schema for SelfQueryRetriever (lazy import)."""
     from langchain.chains.query_constructor.base import AttributeInfo
 
     return [
@@ -145,7 +144,6 @@ DOCUMENT_CONTENT_DESCRIPTION = (
 
 @dataclass
 class ParsedQuery:
-    """Hasil parsing query oleh Self-Query."""
     semantic_query: str
     filters: dict
     original_query: str
@@ -158,10 +156,7 @@ class ParsedQuery:
 def build_self_query_retriever(
     supabase_client=None,
     top_k: int | None = None,
-) -> "SelfQueryRetriever": 
-    """
-    Bangun Self-Query Retriever yang terhubung ke Supabase.
-    """
+) -> "SelfQueryRetriever":
     from langchain.retrievers.self_query.base import SelfQueryRetriever
     from langchain_community.query_constructors.supabase import SupabaseVectorTranslator
     from langchain_community.vectorstores import SupabaseVectorStore
@@ -210,7 +205,6 @@ def build_self_query_retriever(
 
 
 def extract_query_components(query: str) -> ParsedQuery:
-    """Ekstrak semantic query dan filter dari query user."""
     logger.debug(f"Menganalisis query: '{query}'")
 
     filters: dict = {}
@@ -445,7 +439,6 @@ def extract_query_components(query: str) -> ParsedQuery:
     }
 
     def _matches_keyword(text: str, keyword: str) -> bool:
-        """Check if keyword matches in text with word boundary for single words."""
         if " " in keyword:
             # Multi-word keyword: exact substring match
             return keyword in text
@@ -459,9 +452,7 @@ def extract_query_components(query: str) -> ParsedQuery:
         if matched_keywords:
             matched_sections.append((section, len(matched_keywords)))
     
-    # Pilih section dengan keyword match terbanyak
-    # PERBAIKAN: Hanya filter section jika confidence HIGH (>= 2 keyword match)
-    # Ini mengurangi false positive dimana query salah diarahkan ke section yang salah
+    # Pilih filter section jika confidence HIGH (>= 2 keyword match)
     if matched_sections:
         matched_sections.sort(key=lambda x: x[1], reverse=True)
         best_section = matched_sections[0][0]
@@ -500,16 +491,6 @@ def extract_query_components(query: str) -> ParsedQuery:
 def get_available_sections(
     source: Literal["PI", "KKP", "both"] = "both"
 ) -> dict[str, list[str]]:
-    """
-    Dapatkan daftar section yang tersedia untuk PI dan/atau KKP.
-    
-    Args:
-        source: "PI" untuk Penulisan Ilmiah, "KKP" untuk Kuliah Kerja Praktik,
-                "both" untuk keduanya
-    
-    Returns:
-        Dictionary dengan section sebagai key dan deskripsi sebagai value
-    """
     sections = {
         "Front Matter": [
             "Kata Pengantar",
@@ -559,12 +540,6 @@ def get_available_sections(
 
 
 def get_metadata_statistics() -> dict:
-    """
-    Dapatkan statistik metadata yang tersedia dalam dokumen.
-    
-    Returns:
-        Dictionary berisi statistik section, source, dan title yang tersedia
-    """
     stats = {
         "sources": [
             "Panduan Penyusunan Penulisan Imliah (PI) Cetak",
@@ -580,8 +555,8 @@ def get_metadata_statistics() -> dict:
             "BAB V",
             "Lampiran",
         ],
-        "pi_parent_chunks": 23,  # Berdasarkan data parent_chunk_pi.json
-        "kkp_parent_chunks": 23,  # Berdasarkan data parent_chunk_kkp.json
+        "pi_parent_chunks": 23,
+        "kkp_parent_chunks": 23,
         "total_parent_chunks": 46,
         "key_topics": {
             "PI": [
