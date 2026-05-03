@@ -14,23 +14,22 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-# SYSTEM PROMPT
-SYSTEM_PROMPT = """Anda adalah asisten akademik STMIK Widya Cipta Dharma.
+SYSTEM_PROMPT = """Anda adalah asisten akademik resmi STMIK Widya Cipta Dharma yang membantu mahasiswa memahami panduan KKP (Kuliah Kerja Praktik) dan PI (Penulisan Ilmiah).
 
-ATURAN UTAMA:
-1. Jawab HANYA berdasarkan konteks dokumen yang diberikan.
-2. DILARANG menambahkan informasi dari pengetahuan umum.
-3. Jawab LANGSUNG tanpa pembuka ("Berdasarkan...", "Menurut...", "Sesuai...").
-4. DILARANG menyebut "Dokumen 1", "BAB II", atau sumber apapun.
-5. BACA SELURUH konteks dengan teliti sebelum menyimpulkan tidak ada.
-6. Informasi PASTI ada jika kata kunci relevan ditemukan di konteks.
-
-ATURAN FOKUS JAWABAN (SANGAT PENTING):
-7. Jawaban HARUS mengandung kata kunci utama dari pertanyaan.
-8. JANGAN menambahkan informasi yang TIDAK ditanyakan.
-9. Untuk pertanyaan faktual: jawab dalam 1-2 kalimat (10-20 kata).
-10. Untuk pertanyaan daftar: gunakan poin (-) tanpa pengantar.
-11. Untuk pertanyaan format/cara: sertakan JENIS SPESIFIK yang ditanya."""
+ATURAN MENJAWAB:
+1. Jawab HANYA berdasarkan konteks dokumen yang diberikan — DILARANG menambahkan informasi dari pengetahuan umum.
+2. Selalu SEBUTKAN SUMBER jawaban Anda di awal, contoh:
+   - "Berdasarkan BAB II Ketentuan Umum Buku Panduan PI, ..."
+   - "Menurut BAB V Format dan Tata Cara Penulisan Buku Panduan KKP, ..."
+   - "Sesuai ketentuan pada bagian Lampiran Buku Panduan PI, ..."
+3. Berikan jawaban yang LENGKAP dan INFORMATIF — jangan terlalu singkat.
+4. Untuk pertanyaan daftar/prosedur: gunakan poin bernomor atau bullet points.
+5. Untuk pertanyaan faktual: jawab dalam 2-4 kalimat dengan konteks yang cukup.
+6. Gunakan bahasa Indonesia yang baik, jelas, dan mudah dipahami mahasiswa.
+7. BACA SELURUH konteks sebelum menyimpulkan informasi tidak ada.
+8. Jika informasi BENAR-BENAR tidak ditemukan dalam konteks, jawab:
+   "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI yang tersedia. Silakan konsultasikan langsung dengan Dosen Pembimbing atau Program Studi Anda."
+"""
 
 HUMAN_PROMPT = """KONTEKS DOKUMEN:
 {context}
@@ -39,35 +38,28 @@ HUMAN_PROMPT = """KONTEKS DOKUMEN:
 
 PERTANYAAN: {question}
 
-ATURAN MENJAWAB:
-1. Jawab LANGSUNG - kalimat pertama harus langsung menjawab pertanyaan.
-
-2. ULANGI kata kunci pertanyaan di jawaban agar fokus.
-   Contoh: "Berapa spasi naskah PI?" → "Spasi naskah utama PI adalah 1,5."
-   Contoh: "Bagaimana cara menulis referensi buku?" → "Referensi buku ditulis: Penulis, A. A. (Tahun)..."
-   Contoh: "Apa saja elemen sampul depan PI?" → "Elemen sampul depan PI meliputi: ..."
-
-3. JANGAN tambahkan info yang tidak ditanyakan.
-
-4. JANGAN gunakan frasa "adalah sebagai berikut:", "berdasarkan", "sesuai dengan".
-
-5. Jika informasi ada di konteks, JAWAB. Hanya jawab "tidak ditemukan" jika konteks BENAR-BENAR tidak mengandung informasi relevan.
+INSTRUKSI:
+1. Sebutkan sumber informasi (BAB/bagian dari buku panduan) di awal jawaban.
+2. Jawab dengan lengkap dan jelas — sertakan detail penting yang ada di konteks.
+3. Gunakan format yang sesuai: paragraf untuk penjelasan, poin-poin bernomor untuk daftar/prosedur.
+4. Pastikan setiap informasi yang Anda sampaikan BENAR-BENAR ada di konteks.
 
 JAWABAN:"""
 
-HUMAN_PROMPT_WITH_HISTORY ="""KONTEKS DOKUMEN:
+HUMAN_PROMPT_WITH_HISTORY = """KONTEKS DOKUMEN:
 {context}
 
 ---
 
 PERTANYAAN: {question}
 
-INSTRUKSI JAWABAN:
-- Jawab LANGSUNG dan FOKUS pada pertanyaan (target: 15-25 kata untuk faktual, 30-50 kata untuk prosedural).
-- Sertakan detail relevan yang LANGSUNG menjawab pertanyaan, tapi JANGAN elaborasi berlebihan.
-- Gunakan format yang sesuai: paragraf untuk penjelasan, poin-poin untuk daftar.
-- Jangan sertakan referensi sumber, nomor dokumen, atau sitasi apapun.
-- VALIDASI: Pastikan jawaban FOKUS dan setiap informasi ADA di konteks."""
+INSTRUKSI:
+1. Sebutkan sumber informasi (BAB/bagian dari buku panduan) di awal jawaban.
+2. Jawab dengan lengkap dan jelas berdasarkan konteks.
+3. Gunakan format yang sesuai: paragraf untuk penjelasan, poin-poin bernomor untuk daftar.
+4. Pastikan setiap informasi BENAR-BENAR ada di konteks dokumen.
+
+JAWABAN:"""
 
 CONVERSATIONAL_PROMPT = """Riwayat percakapan kita sejauh ini:
 
@@ -129,13 +121,11 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
         matched_children = meta.get("matched_children", [])
 
         # Build header
-        header = f"[Dokumen {i}]"
-        if title:
-            header += f" {title}"
+        header = f"[Sumber: Buku Panduan {'PI' if 'pi' in parent_id.lower() else 'KKP'}]"
         if section:
-            header += f" | Bagian: {section}"
-        if source:
-            header += f" | Sumber: {source}"
+            header += f" — {section}"
+        if title and title != section:
+            header += f" — {title}"
 
         score = meta.get("cross_encoder_score")
         if score is not None:
@@ -152,22 +142,6 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
 def _postprocess_answer(answer: str) -> str:
     # Strip leading whitespace/newlines
     answer = answer.strip()
-    
-    # Remove common preamble patterns
-    preamble_patterns = [
-        r'^Berdasarkan (?:dokumen|panduan|konteks)[^,]*,\s*',
-        r'^Menurut (?:dokumen|panduan)[^,]*,\s*',
-        r'^Sesuai dengan (?:dokumen|panduan)[^,]*,\s*',
-        r'^Dalam (?:dokumen|panduan)[^,]*,\s*',
-    ]
-    for pattern in preamble_patterns:
-        answer = re.sub(pattern, '', answer, flags=re.IGNORECASE)
-    
-    # Remove "adalah sebagai berikut:" and just keep the content after it
-    answer = re.sub(r'^[^:]*adalah sebagai berikut\s*:\s*\n?', '', answer, flags=re.IGNORECASE)
-    
-    # Remove BAB/Dokumen references inline
-    answer = re.sub(r'\b(?:BAB\s+[IVX]+|Dokumen\s+\d+)\b', '', answer)
     
     # Clean up extra whitespace
     answer = re.sub(r'\n{3,}', '\n\n', answer)
@@ -213,7 +187,7 @@ def build_rag_chain(streaming: bool = False):
         model=settings.llm_model,
         api_key=settings.open_api_key,
         temperature=0,
-        max_tokens=600,  # Reduced from 1200 to force conciseness
+        max_tokens=1200,  # Increased back to 1200 to allow comprehensive answers
         streaming=streaming,
     )
 
