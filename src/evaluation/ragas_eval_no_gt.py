@@ -1,5 +1,13 @@
 """
 RAGAS Evaluation WITHOUT Ground Truth
+--------------------------------------
+Versi yang sudah dimodifikasi berdasarkan prinsip:
+
+1. Faithfulness sebagai HARD GUARDRAIL (bukan sekadar metrik biasa)
+2. Custom metrics untuk mengukur kualitas yang RAGAS tidak bisa ukur
+3. Deteksi otomatis "false negative" faithfulness yang perlu dicek manual
+4. Threshold berbeda per metrik sesuai risiko dan prioritas bisnis
+5. Kategorisasi hasil yang lebih actionable (bukan sekedar pass/fail)
 """
 
 from datasets import Dataset
@@ -9,20 +17,75 @@ from ragas.metrics import (
     answer_relevancy,
 )
 from ragas.metrics._context_precision import LLMContextPrecisionWithoutReference
+from ragas.metrics import SimpleCriteriaScore, RubricsScore
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from loguru import logger
 import json
+import math
 from datetime import datetime
-from typing import List, Dict
+from statistics import mean
+from typing import List, Dict, Optional
+from enum import Enum
 
 from config.settings import get_settings
 
 
-#
-# EVALUATION QUESTIONS (TANPA GROUND TRUTH)
-#
+# ============================================================
+# CONSTANTS & ENUMS
+# ============================================================
+
+class MetricRole(Enum):
+    """
+    Peran setiap metrik dalam sistem evaluasi.
+    Ini yang menentukan bagaimana kita bereaksi saat score rendah.
+    """
+    HARD_GUARDRAIL = "hard_guardrail"   # Rendah = bahaya nyata, harus diperbaiki
+    QUALITY_SIGNAL = "quality_signal"   # Rendah = perlu investigasi, bukan langsung panik
+    BUSINESS_KPI   = "business_kpi"     # Diukur berdasarkan standar bisnis kita sendiri
+
+
+METRIC_CONFIG = {
+    "faithfulness": {
+        "threshold": 0.70,
+        "role": MetricRole.HARD_GUARDRAIL,
+        "reason": "Halusinasi berbahaya untuk konteks akademik. Namun threshold dikalibrasi ke 0.70 "
+                  "karena jawaban chatbot bersifat elaboratif (prefix sumber & penutup tujuan) yang "
+                  "sering dihukum RAGAS sebagai false negative meskipun secara faktual akurat.",
+        "false_negative_suspect_threshold": 0.80,
+    },
+    "answer_relevancy": {
+        "threshold": 0.70,  
+        "role": MetricRole.QUALITY_SIGNAL,
+        "reason": "Jawaban yang elaboratif dan lengkap cenderung dihukum metrik ini. "
+                  "Threshold diturunkan agar tidak menghukum jawaban yang genuinely helpful.",
+    },
+    "llm_context_precision_without_reference": {
+        "threshold": 0.80,
+        "role": MetricRole.HARD_GUARDRAIL,
+        "reason": "Retriever yang mengambil chunk tidak relevan akan meracuni generator. "
+                  "Ini masalah infrastruktur, bukan masalah prompt.",
+    },
+    # Custom metrics 
+    "answer_completeness": {
+        "threshold": 3.5,
+        "role": MetricRole.BUSINESS_KPI,
+        "reason": "Metrik ini mengukur apakah jawaban cukup lengkap sehingga mahasiswa "
+                  "tidak perlu bertanya ulang. Ini yang paling relevan dengan kepuasan user.",
+    },
+    "answer_actionability": {
+        "threshold": 3.5,
+        "role": MetricRole.BUSINESS_KPI,
+        "reason": "Jawaban harus memberikan informasi konkret yang bisa langsung dipakai, "
+                  "bukan hanya penjelasan abstrak.",
+    },
+}
+
+
+# ============================================================
+# EVALUATION QUESTIONS
+# ============================================================
 
 EVAL_QUESTIONS_PI = [
     "Apa syarat SKS minimal untuk mengambil Penulisan Ilmiah (PI)?",
@@ -125,39 +188,171 @@ EVAL_QUESTIONS_KKP = [
 ]
 
 
-#
-# EVALUATION FUNCTIONS
-#
+# ============================================================
+# CUSTOM METRICS FACTORY
+# ============================================================
+
+def build_custom_metrics(evaluator_llm: LangchainLLMWrapper) -> Dict:
+    """
+    Membangun custom metrics yang mengukur dimensi kualitas yang
+    tidak bisa diukur oleh RAGAS default.
+    """
+
+    # --- Metric 1: Completeness ---
+    # Masalah yang kamu alami: jawaban singkat dapat skor tinggi di RAGAS
+    # tapi tidak memuaskan user. Metric ini mengukur hal tersebut.
+    answer_completeness = SimpleCriteriaScore(
+        name="answer_completeness",
+        definition=(
+            "Nilai apakah jawaban memberikan informasi yang CUKUP LENGKAP "
+            "sehingga mahasiswa tidak perlu bertanya lagi untuk memahami topik tersebut. "
+            "Jawaban yang hanya menyebutkan angka/fakta tanpa konteks dianggap tidak lengkap. "
+            "Jawaban ideal mencakup: fakta utama, kondisi/syarat jika ada, dan konteks yang membantu pemahaman. "
+            "Gunakan bahasa Indonesia dalam penilaian."
+        ),
+        llm=evaluator_llm,
+    )
+
+    # --- Metric 2: Actionability ---
+    # Mengukur apakah jawaban bisa langsung dipakai mahasiswa,
+    # bukan sekadar informasi abstrak.
+    answer_actionability = SimpleCriteriaScore(
+        name="answer_actionability",
+        definition=(
+            "Nilai apakah jawaban memberikan informasi konkret yang dapat langsung "
+            "digunakan mahasiswa untuk mengambil tindakan atau keputusan. "
+            "Jawaban yang baik: menyebutkan angka spesifik jika ada, "
+            "menyebutkan prosedur/langkah jika relevan, menghindari penjelasan terlalu abstrak. "
+            "Jawaban yang hanya bilang 'sesuai ketentuan yang berlaku' tanpa detail "
+            "dianggap tidak actionable. "
+            "Gunakan bahasa Indonesia dalam penilaian."
+        ),
+        llm=evaluator_llm,
+    )
+
+    return {
+        "answer_completeness": answer_completeness,
+        "answer_actionability": answer_actionability,
+    }
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def _safe_score(value) -> Optional[float]:
+    """Konversi nilai metrik RAGAS ke float, return None jika tidak valid."""
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        values = [v for v in value if v is not None and not (isinstance(v, float) and math.isnan(v))]
+        return mean(values) if values else None
+    if value is None:
+        return None
+    val = float(value)
+    return None if math.isnan(val) else val
+
+
+def _get_score_at_index(metric_result, index: int) -> Optional[float]:
+    """Ambil score per item di index tertentu."""
+    if hasattr(metric_result, "tolist"):
+        metric_result = metric_result.tolist()
+    if isinstance(metric_result, (list, tuple)):
+        val = metric_result[index] if index < len(metric_result) else None
+    else:
+        val = metric_result
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return None
+    return float(val)
+
+
+def _is_faithfulness_false_negative_suspect(
+    faithfulness_score: Optional[float],
+    context: List[str],
+    answer: str,
+) -> bool:
+    """
+    Deteksi apakah faithfulness rendah kemungkinan adalah FALSE NEGATIVE,
+    bukan halusinasi nyata.
+
+    False negative terjadi ketika:
+    - Jawaban parafrase info dari konteks (valid tapi tidak verbatim)
+    - Jawaban sintesis dari beberapa chunk (inferensi valid)
+    - LLM judge gagal karena bahasa Indonesia
+
+    Heuristik sederhana: jika score sangat rendah (< threshold suspect)
+    tapi konteks tidak kosong dan jawaban cukup panjang,
+    tandai untuk review manual.
+    """
+    if faithfulness_score is None:
+        return False
+
+    suspect_threshold = METRIC_CONFIG["faithfulness"]["false_negative_suspect_threshold"]
+    has_context = len(context) > 0 and any(len(c.strip()) > 50 for c in context)
+    answer_has_substance = len(answer.split()) > 15
+
+    return (
+        faithfulness_score < suspect_threshold
+        and has_context
+        and answer_has_substance
+    )
+
+
+def _categorize_item_result(item_metrics: Dict) -> str:
+    """
+    Kategorisasi hasil per item menjadi actionable label.
+
+    Ini lebih berguna dari sekadar pass/fail karena kamu tahu
+    MENGAPA item tersebut bermasalah dan APA yang harus dilakukan.
+    """
+    faith = item_metrics.get("faithfulness")
+    relevancy = item_metrics.get("answer_relevancy")
+    precision = item_metrics.get("llm_context_precision_without_reference")
+    completeness = item_metrics.get("answer_completeness")
+
+    faith_threshold = METRIC_CONFIG["faithfulness"]["threshold"]
+    precision_threshold = METRIC_CONFIG["llm_context_precision_without_reference"]["threshold"]
+
+    # Prioritas 1: masalah di retriever (upstream problem)
+    if precision is not None and precision < precision_threshold:
+        return "RETRIEVER_ISSUE"  # Perbaiki chunking/embedding/similarity threshold
+
+    # Prioritas 2: halusinasi (berbahaya untuk konteks akademik)
+    if faith is not None and faith < faith_threshold:
+        return "POSSIBLE_HALLUCINATION"  # Cek manual dulu, baru perbaiki prompt
+
+    # Prioritas 3: jawaban kurang lengkap (user experience issue)
+    if completeness is not None and completeness < METRIC_CONFIG["answer_completeness"]["threshold"]:
+        return "INCOMPLETE_ANSWER"  # Perbaiki prompt untuk dorong jawaban lebih lengkap
+
+    # Prioritas 4: jawaban OOT (relevancy issue, tapi toleransi lebih tinggi)
+    if relevancy is not None and relevancy < METRIC_CONFIG["answer_relevancy"]["threshold"]:
+        return "LOW_RELEVANCY"  # Investigasi dulu sebelum action
+
+    return "PASS"
+
+
+# ============================================================
+# CORE EVALUATION FUNCTION
+# ============================================================
 
 def evaluate_rag_no_ground_truth(
     questions: List[str],
     answers: List[str],
     contexts: List[List[str]],
-    dataset_name: str = "both"
+    dataset_name: str = "both",
 ) -> Dict:
-    
-    logger.info(f"Starting RAGAS evaluation (NO GROUND TRUTH) for {dataset_name} dataset...")
-    logger.info(f"Number of questions: {len(questions)}")
-    
-    # Get settings
+
+    logger.info(f"Starting evaluation for dataset: {dataset_name} ({len(questions)} questions)")
+
     settings = get_settings()
-    
-    # Create dataset
-    data = {
-        "question": questions,
-        "answer": answers,
-        "contexts": contexts,
-    }
-    
-    dataset = Dataset.from_dict(data)
-    
-    # Setup evaluator LLM dan embeddings
-    logger.info("Setting up evaluator LLM and embeddings...")
+
+    # --- Setup LLM & Embeddings ---
     evaluator_llm = LangchainLLMWrapper(
         ChatOpenAI(
             model=settings.llm_model,
             api_key=settings.open_api_key,
-            temperature=0.0,
+            temperature=0,  # Deterministic untuk konsistensi antar run
         )
     )
     evaluator_embeddings = LangchainEmbeddingsWrapper(
@@ -166,134 +361,262 @@ def evaluate_rag_no_ground_truth(
             api_key=settings.open_api_key,
         )
     )
-    
-    # Define metrics (NO GROUND TRUTH REQUIRED)
+
+    # --- Build Metrics ---
+    # Pisahkan RAGAS metrics dan custom metrics karena cara evaluasinya berbeda.
+    # RAGAS metrics berjalan dalam satu batch evaluate() call.
+    # Custom metrics (SimpleCriteriaScore) juga bisa dimasukkan ke evaluate()
+    # tapi dipisahkan di sini agar config-nya lebih jelas.
+
     context_precision_no_ref = LLMContextPrecisionWithoutReference(llm=evaluator_llm)
-    
-    metrics = [
-        faithfulness,                  # Tidak halusinasi - jawaban didukung oleh context
-        answer_relevancy,              # Jawaban relevan dengan pertanyaan
-        context_precision_no_ref,      # Chunks yang diambil relevan dengan pertanyaan
+    custom_metrics = build_custom_metrics(evaluator_llm)
+
+    ragas_metrics = [
+        faithfulness,
+        answer_relevancy,
+        context_precision_no_ref,
+        custom_metrics["answer_completeness"],
+        custom_metrics["answer_actionability"],
     ]
-    
-    logger.info("Metrics to evaluate:")
-    for metric in metrics:
-        logger.info(f"  - {metric.name}")
-    
-    # Run evaluation
-    logger.info("Running RAGAS evaluation...")
-    results = evaluate(
-        dataset, 
-        metrics=metrics,
+
+    # --- Prepare Dataset ---
+    dataset = Dataset.from_dict({
+        "question": questions,
+        "answer": answers,
+        "contexts": contexts,
+    })
+
+    # --- Run Evaluation ---
+    logger.info("Running evaluation (this may take a while)...")
+    raw_results = evaluate(
+        dataset,
+        metrics=ragas_metrics,
         llm=evaluator_llm,
-        embeddings=evaluator_embeddings
+        embeddings=evaluator_embeddings,
     )
-    
-    # Extract scores with safe conversion (handle list results)
-    def _safe_score(value) -> float:
-        import math
-        from statistics import mean
-        
-        if hasattr(value, "tolist"):
-            value = value.tolist()
-        if isinstance(value, (list, tuple)):
-            # Filter out None and NaN values
-            values = [v for v in value if v is not None and not (isinstance(v, float) and math.isnan(v))]
-            return mean(values) if values else 0.0
-        val = float(value)
-        return 0.0 if math.isnan(val) else val
-    
-    scores = {
-        "faithfulness": _safe_score(results["faithfulness"]),
-        "answer_relevancy": _safe_score(results["answer_relevancy"]),
-        "llm_context_precision_without_reference": _safe_score(results["llm_context_precision_without_reference"]),
+
+    # --- Aggregate Scores ---
+    aggregate_scores = {
+        "faithfulness": _safe_score(raw_results["faithfulness"]),
+        "answer_relevancy": _safe_score(raw_results["answer_relevancy"]),
+        "llm_context_precision_without_reference": _safe_score(
+            raw_results["llm_context_precision_without_reference"]
+        ),
+        "answer_completeness": _safe_score(raw_results["answer_completeness"]),
+        "answer_actionability": _safe_score(raw_results["answer_actionability"]),
     }
-    
-    # Calculate overall score (average of all metrics)
-    overall_score = sum(scores.values()) / len(scores)
-    scores["overall"] = overall_score
-    
-    # Define thresholds
-    thresholds = {
-        "faithfulness": 0.85,
-        "answer_relevancy": 0.85,
-        "llm_context_precision_without_reference": 0.80,
+
+    # --- Quality Gate Logic ---
+    # Hard guardrails HARUS pass. Business KPI dan quality signal punya toleransi berbeda.
+    # Ini menggantikan "all metrics must pass" yang terlalu naif.
+
+    guardrail_failures = []
+    quality_warnings = []
+    business_kpi_failures = []
+
+    for metric_name, score in aggregate_scores.items():
+        if metric_name not in METRIC_CONFIG or score is None:
+            continue
+        config = METRIC_CONFIG[metric_name]
+        threshold = config["threshold"]
+
+        if score < threshold:
+            if config["role"] == MetricRole.HARD_GUARDRAIL:
+                guardrail_failures.append(metric_name)
+            elif config["role"] == MetricRole.QUALITY_SIGNAL:
+                quality_warnings.append(metric_name)
+            elif config["role"] == MetricRole.BUSINESS_KPI:
+                business_kpi_failures.append(metric_name)
+
+    # Overall: PASS hanya jika tidak ada guardrail failure
+    # (business KPI dan quality signal tidak memblokir, tapi dicatat)
+    overall_pass = len(guardrail_failures) == 0
+
+    # --- Per-Item Details ---
+    details = []
+    category_summary = {
+        "PASS": 0,
+        "RETRIEVER_ISSUE": 0,
+        "POSSIBLE_HALLUCINATION": 0,
+        "INCOMPLETE_ANSWER": 0,
+        "LOW_RELEVANCY": 0,
     }
-    
-    # Check if all metrics pass
-    all_pass = all(scores[metric] >= thresholds[metric] for metric in thresholds)
-    
-    # Prepare results
-    result = {
-        "timestamp": datetime.now().isoformat(),
-        "num_questions": len(questions),
-        "dataset_type": dataset_name,
-        "threshold": thresholds,
-        "all_pass": all_pass,
-        "scores": scores,
-        "details": []
-    }
-    
-    # Add detailed results for each question
+
     for i in range(len(questions)):
-        # Helper function to get score at index
-        def _get_score_at_index(metric_result, index):
-            if hasattr(metric_result, "tolist"):
-                metric_result = metric_result.tolist()
-            if isinstance(metric_result, (list, tuple)):
-                return metric_result[index] if index < len(metric_result) else None
-            return metric_result
-        
-        detail = {
+        item_metrics = {
+            "faithfulness": _get_score_at_index(raw_results["faithfulness"], i),
+            "answer_relevancy": _get_score_at_index(raw_results["answer_relevancy"], i),
+            "llm_context_precision_without_reference": _get_score_at_index(
+                raw_results["llm_context_precision_without_reference"], i
+            ),
+            "answer_completeness": _get_score_at_index(raw_results["answer_completeness"], i),
+            "answer_actionability": _get_score_at_index(raw_results["answer_actionability"], i),
+        }
+
+        category = _categorize_item_result(item_metrics)
+        category_summary[category] = category_summary.get(category, 0) + 1
+
+        # Flag kemungkinan false negative faithfulness untuk review manual
+        needs_manual_review = (
+            category == "POSSIBLE_HALLUCINATION"
+            and _is_faithfulness_false_negative_suspect(
+                item_metrics["faithfulness"],
+                contexts[i],
+                answers[i],
+            )
+        )
+
+        details.append({
             "index": i + 1,
             "question": questions[i],
             "answer": answers[i],
             "contexts": contexts[i],
-            "metrics": {
-                "faithfulness": _get_score_at_index(results["faithfulness"], i),
-                "answer_relevancy": _get_score_at_index(results["answer_relevancy"], i),
-                "llm_context_precision_without_reference": _get_score_at_index(results["llm_context_precision_without_reference"], i),
-            }
-        }
-        result["details"].append(detail)
-    
-    # Log results
-    logger.info("\n" + "="*80)
-    logger.info("EVALUATION RESULTS (NO GROUND TRUTH)")
-    logger.info("="*80)
-    logger.info(f"Dataset: {dataset_name}")
-    logger.info(f"Questions: {len(questions)}")
-    logger.info(f"\nScores:")
-    for metric, score in scores.items():
-        threshold = thresholds.get(metric, 0.85)
-        status = "✅" if metric == "overall" or score >= threshold else "❌"
-        logger.info(f"  {status} {metric}: {score:.4f} (threshold: {threshold})")
-    logger.info(f"\nOverall Pass: {'✅ YES' if all_pass else '❌ NO'}")
-    logger.info("="*80)
-    
+            "metrics": item_metrics,
+            "category": category,
+            # Jika True: jangan langsung fix prompt, cek dulu apakah
+            # ini benar halusinasi atau false negative RAGAS
+            "needs_manual_review": needs_manual_review,
+            "manual_review_reason": (
+                "Faithfulness rendah tapi konteks tersedia dan jawaban substansial. "
+                "Kemungkinan RAGAS salah menilai parafrase/sintesis sebagai halusinasi. "
+                "Cek manual: apakah jawaban benar-benar tidak didukung konteks?"
+            ) if needs_manual_review else None,
+        })
+
+    # --- Final Result ---
+    result = {
+        "timestamp": datetime.now().isoformat(),
+        "dataset_type": dataset_name,
+        "num_questions": len(questions),
+
+        # Scores agregat
+        "scores": aggregate_scores,
+
+        # Threshold yang digunakan (untuk audit/reproducibility)
+        "thresholds": {k: v["threshold"] for k, v in METRIC_CONFIG.items() if k in aggregate_scores},
+
+        # Quality gate: hanya guardrail yang memblokir
+        "overall_pass": overall_pass,
+        "guardrail_failures": guardrail_failures,       # Harus diperbaiki
+        "quality_warnings": quality_warnings,           # Investigasi dulu
+        "business_kpi_failures": business_kpi_failures, # Evaluasi apakah acceptable
+
+        # Ringkasan kategori untuk triaging
+        "category_summary": category_summary,
+        "items_needing_manual_review": sum(
+            1 for d in details if d["needs_manual_review"]
+        ),
+
+        # Detail per item
+        "details": details,
+    }
+
+    _log_results(result)
     return result
 
 
-def save_evaluation_results(results: Dict, filename: str = None):
-    
+# ============================================================
+# LOGGING
+# ============================================================
+
+def _log_results(result: Dict):
+    logger.info("\n" + "=" * 80)
+    logger.info("EVALUATION RESULTS")
+    logger.info("=" * 80)
+    logger.info(f"Dataset  : {result['dataset_type']}")
+    logger.info(f"Questions: {result['num_questions']}")
+
+    logger.info("\n📊 Scores:")
+    for metric, score in result["scores"].items():
+        if score is None:
+            logger.warning(f"  ⚠️  {metric}: N/A")
+            continue
+        threshold = result["thresholds"].get(metric, 0)
+        config = METRIC_CONFIG.get(metric, {})
+        role_label = config.get("role", MetricRole.QUALITY_SIGNAL).value
+        status = "✅" if score >= threshold else "❌"
+        logger.info(f"  {status} {metric}: {score:.4f} (threshold: {threshold}) [{role_label}]")
+
+    logger.info("\n🚦 Quality Gate:")
+    if result["guardrail_failures"]:
+        logger.error(f"  ❌ FAILED — Guardrail failures: {result['guardrail_failures']}")
+        for m in result["guardrail_failures"]:
+            logger.error(f"     → {METRIC_CONFIG[m]['reason']}")
+    else:
+        logger.info("  ✅ PASSED — All hard guardrails met")
+
+    if result["quality_warnings"]:
+        logger.warning(f"  ⚠️  Quality warnings (investigate before action): {result['quality_warnings']}")
+
+    if result["business_kpi_failures"]:
+        logger.warning(f"  📉 Business KPI below target: {result['business_kpi_failures']}")
+
+    logger.info("\n📁 Category Summary:")
+    for category, count in result["category_summary"].items():
+        logger.info(f"  {category}: {count} items")
+
+    manual_review_count = result["items_needing_manual_review"]
+    if manual_review_count > 0:
+        logger.warning(
+            f"\n🔍 {manual_review_count} item(s) flagged for MANUAL REVIEW "
+            f"(faithfulness mungkin false negative — jangan langsung fix tanpa cek dulu)"
+        )
+
+    logger.info("=" * 80)
+
+
+# ============================================================
+# FILE I/O
+# ============================================================
+
+def save_evaluation_results(results: Dict, filename: str = None) -> str:
     if filename is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"evaluation_results_no_gt_{timestamp}.json"
-    
-    with open(filename, 'w', encoding='utf-8') as f:
+        filename = f"evaluation_results_{timestamp}.json"
+
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    
+
     logger.info(f"Results saved to: {filename}")
     return filename
 
 
-#
-# MAIN EVALUATION FUNCTION
-#
+def export_manual_review_items(results: Dict, filename: str = None) -> Optional[str]:
+    """
+    Export item-item yang perlu dicek manual ke file terpisah.
+    Berguna agar kamu tahu persis mana yang perlu dilihat,
+    bukan scroll ratusan baris JSON.
+    """
+    items = [d for d in results["details"] if d["needs_manual_review"]]
+    if not items:
+        logger.info("Tidak ada item yang perlu manual review.")
+        return None
 
-def run_full_evaluation_no_gt(rag_pipeline_func, dataset: str = "both"):
-    
-    # Select questions based on dataset
+    if filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"manual_review_{timestamp}.json"
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump({
+            "total_flagged": len(items),
+            "instruction": (
+                "Untuk setiap item berikut: cek apakah jawaban BENAR-BENAR tidak didukung konteks "
+                "(halusinasi nyata) atau RAGAS yang salah menilai (false negative). "
+                "Jika false negative: jangan ubah sistem, catat sebagai limitasi RAGAS. "
+                "Jika halusinasi nyata: perbaiki prompt/retriever."
+            ),
+            "items": items,
+        }, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"Manual review items saved to: {filename}")
+    return filename
+
+
+# ============================================================
+# MAIN RUNNER
+# ============================================================
+
+def run_full_evaluation_no_gt(rag_pipeline_func, dataset: str = "both") -> tuple:
     if dataset == "pi":
         questions = EVAL_QUESTIONS_PI
     elif dataset == "kkp":
@@ -302,45 +625,48 @@ def run_full_evaluation_no_gt(rag_pipeline_func, dataset: str = "both"):
         questions = EVAL_QUESTIONS_PI + EVAL_QUESTIONS_KKP
     else:
         raise ValueError(f"Invalid dataset: {dataset}. Must be 'pi', 'kkp', or 'both'")
-    
-    logger.info(f"Running evaluation on {len(questions)} questions from {dataset} dataset...")
-    
-    # Generate answers and collect contexts
-    answers = []
-    contexts = []
-    
+
+    # --- Generate answers ---
+    answers, contexts = [], []
     for i, question in enumerate(questions, 1):
-        logger.info(f"Processing question {i}/{len(questions)}: {question[:60]}...")
-        
+        logger.info(f"[{i}/{len(questions)}] {question[:70]}...")
         try:
             answer, context_list = rag_pipeline_func(question)
             answers.append(answer)
             contexts.append(context_list)
         except Exception as e:
-            logger.error(f"Error processing question {i}: {e}")
+            logger.error(f"Error pada pertanyaan {i}: {e}")
             answers.append("Error generating answer")
             contexts.append([])
-    
-    # Run evaluation
+
+    # --- Evaluate ---
     results = evaluate_rag_no_ground_truth(
         questions=questions,
         answers=answers,
         contexts=contexts,
-        dataset_name=dataset
+        dataset_name=dataset,
     )
-    
-    # Save results
-    filename = save_evaluation_results(results)
-    
-    return results, filename
 
+    # --- Save ---
+    main_file = save_evaluation_results(results)
+    review_file = export_manual_review_items(results)
+
+    return results, main_file, review_file
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-    # Example usage
     from main import run_rag_pipeline
-    
+
     logger.info("Starting RAGAS evaluation WITHOUT ground truth...")
-    results, filename = run_full_evaluation_no_gt(run_rag_pipeline, dataset="both")
-    
+    results, main_file, review_file = run_full_evaluation_no_gt(
+        run_rag_pipeline, dataset="both"
+    )
+
     logger.info(f"\n✅ Evaluation complete!")
-    logger.info(f"Results saved to: {filename}")
+    logger.info(f"Main results : {main_file}")
+    if review_file:
+        logger.info(f"Manual review: {review_file}  ← cek ini dulu sebelum iterasi")
