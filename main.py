@@ -314,12 +314,13 @@ def run_eval_no_gt(dataset: str = "both") -> None:
         result = run_rag_pipeline(question, debug=False)
         return result["answer"], result["contexts"]
     
-    results, filename = run_full_evaluation_no_gt(pipeline_fn, dataset=dataset)
+    results, main_file, review_file = run_full_evaluation_no_gt(pipeline_fn, dataset=dataset)
     
     logger.info(f"\n✅ Evaluation complete!")
-    logger.info(f"📄 Results saved to: {filename}")
-    logger.info(f"📊 Overall Score: {results['scores']['overall']:.4f}")
-    logger.info(f"🎯 All Pass: {'✅ YES' if results['all_pass'] else '❌ NO'}")
+    logger.info(f"📄 Results saved to: {main_file}")
+    if review_file:
+        logger.info(f"🔍 Manual review items saved to: {review_file}")
+    logger.info(f"🎯 Overall Pass (No Guardrail Failures): {'✅ YES' if results.get('overall_pass') else '❌ NO'}")
 
 
 def _print_answer(answer: str, num_docs: int) -> None:
