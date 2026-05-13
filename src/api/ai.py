@@ -16,6 +16,9 @@ class ChatResponse(BaseModel):
     num_docs: int
     session_id: str
     sources: list[dict] = []
+    intent: str | None = None
+    confidence: float | None = None
+    reasoning: str | None = None
 
 
 # Route
@@ -36,6 +39,9 @@ async def chat_endpoint(body: ChatRequest):
             num_docs=result["num_docs"],
             session_id=body.session_id,
             sources=result.get("sources", []),
+            intent=result.get("intent"),
+            confidence=result.get("confidence"),
+            reasoning=result.get("reasoning"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
