@@ -101,6 +101,21 @@ class ConversationMemory:
     def is_empty(self) -> bool:
         return len(self._turns) == 0
 
+    @property
+    def has_prior_context(self) -> bool:
+        """Check if there's at least one complete Q&A pair before the current turn."""
+        # We need at least: [user, assistant, user] = 3 turns
+        # The last turn is the current user question
+        assistant_turns = [t for t in self._turns if t.role == "assistant"]
+        return len(assistant_turns) > 0
+
+    def get_previous_question(self) -> str | None:
+        """Get the question BEFORE the current one (second-to-last user turn)."""
+        user_turns = [t for t in self._turns if t.role == "user"]
+        if len(user_turns) >= 2:
+            return user_turns[-2].content
+        return None
+
     def reset(self) -> None:
         self._turns = []
 

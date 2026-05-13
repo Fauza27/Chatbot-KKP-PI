@@ -61,18 +61,28 @@ INSTRUKSI:
 
 JAWABAN:"""
 
-CONVERSATIONAL_PROMPT = """Riwayat percakapan kita sejauh ini:
+CONVERSATIONAL_PROMPT = """Anda adalah asisten akademik resmi STMIK Widya Cipta Dharma yang membantu mahasiswa dengan panduan KKP dan PI.
 
+Riwayat percakapan kita sejauh ini:
 {history}
 
 ---
 
 Pesan user: {question}
 
-Jawab dengan ramah dan membantu. Jika pertanyaan membutuhkan informasi spesifik \
-dari dokumen internal yang tidak ada dalam riwayat, sampaikan bahwa Anda akan \
-mencarinya di database dokumen jika diperlukan.
-"""
+INSTRUKSI UNTUK PESAN CONVERSATIONAL:
+1. Jika user menyapa (halo, selamat pagi, dll) → Balas dengan sapaan yang ramah dan tawarkan bantuan
+2. Jika user berterima kasih → Balas dengan sopan dan tawarkan bantuan lebih lanjut
+3. Jika user bertanya hal umum → Berikan jawaban singkat dan arahkan ke pertanyaan spesifik
+4. Jika user meminta rangkuman → Rangkum percakapan sebelumnya
+5. Selalu akhiri dengan menawarkan bantuan terkait panduan KKP/PI
+
+Contoh respons yang baik:
+- "Halo! Selamat pagi juga. Saya siap membantu Anda dengan pertanyaan seputar panduan KKP dan PI. Ada yang ingin Anda tanyakan?"
+- "Sama-sama! Senang bisa membantu. Jika ada pertanyaan lain tentang KKP atau PI, jangan ragu untuk bertanya."
+- "Terima kasih sudah menggunakan layanan ini. Semoga informasi yang diberikan bermanfaat untuk studi Anda!"
+
+JAWABAN:"""
 
 CLARIFICATION_PROMPT = """Riwayat percakapan kita:
 
@@ -333,14 +343,25 @@ class RAGChain:
 
         logger.info(f"Clarification mode (pakai konteks lama): '{question[:60]}'")
 
-        if last_context_docs_text:
-            context_str = "\n\n---\n\n".join(
-                f"[Dokumen {i + 1}]\n{text}"
-                for i, text in enumerate(last_context_docs_text[:3])
-            )
-        else:
-            context_str = "(Tidak ada dokumen konteks dari percakapan sebelumnya)"
+        # Check if we have relevant context
+        if not last_context_docs_text:
+            logger.warning("No context available for clarification, falling back to retrieval")
+            return self._fallback_to_retrieval(question, conversation_history)
 
+        # Build context string
+        context_str = "\n\n---\n\n".join(
+            f"[Dokumen {i + 1}]\n{text}"
+            for i, text in enumerate(last_context_docs_text[:3])
+        )
+
+        # Check semantic relevance between question and context
+        relevance_score = self._check_context_relevance(question, context_str)
+        
+        if relevance_score < 0.3:  # Low relevance threshold
+            logger.warning(f"Context relevance too low ({relevance_score:.2f}), falling back to retrieval")
+            return self._fallback_to_retrieval(question, conversation_history)
+
+        # Proceed with clarification using existing context
         history_text = "\n".join([
             f"{'User' if m['role'] == 'user' else 'Asisten'}: {m['content'][:200]}"
             for m in conversation_history[-6:]
@@ -364,6 +385,97 @@ class RAGChain:
             "answer": answer,
             "sources": [],
         }
+
+    def _check_context_relevance(self, question: str, context: str) -> float:
+        """
+        Check semantic relevance between question and context
+        Returns score between 0.0 and 1.0
+        """
+        try:
+            # Simple keyword-based relevance check
+            question_words = set(question.lower().split())
+            context_words = set(context.lower().split())
+            
+            # Remove common words
+            common_words = {"dan", "atau", "yang", "di", "ke", "dari", "untuk", "pada", "dengan", 
+                          "adalah", "ini", "itu", "dalam", "tidak", "akan", "bisa", "ada", "juga"}
+            
+            question_words -= common_words
+            context_words -= common_words
+            
+            if not question_words:
+                return 0.0
+            
+            # Calculate overlap
+            overlap = len(question_words.intersection(context_words))
+            relevance = overlap / len(question_words)
+            
+            logger.debug(f"Context relevance: {relevance:.2f} (overlap: {overlap}/{len(question_words)})")
+            return relevance
+            
+        except Exception as e:
+            logger.warning(f"Error checking context relevance: {e}")
+            return 0.5  # Default to medium relevance
+
+    def _fallback_to_retrieval(self, question: str, conversation_history: list[dict]) -> dict[str, str | list]:
+        """
+        Fallback to full retrieval when clarification context is not relevant
+        """
+        logger.info("🔄 Fallback: Switching from clarification to retrieval mode")
+        
+        try:
+            # Import here to avoid circular imports
+            from src.retrieval.self_query import extract_query_components
+            from src.retrieval.hybrid_search import HybridSearcher
+            from src.retrieval.parent_child import ParentChildFetcher
+            from src.retrieval.reranker import CrossEncoderReranker
+            
+            # Extract query components
+            parsed = extract_query_components(question)
+            
+            # Perform hybrid search
+            searcher = HybridSearcher()
+            search_results = searcher.search(
+                query=parsed.semantic_query,
+                filters=parsed.filters,
+            )
+            
+            if not search_results:
+                return {
+                    "answer": (
+                        "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI yang tersedia. "
+                        "Silakan konsultasikan langsung dengan Dosen Pembimbing atau Program Studi Anda."
+                    ),
+                    "sources": []
+                }
+            
+            # Fetch parent documents
+            fetcher = ParentChildFetcher()
+            parent_results = fetcher.fetch_parents(search_results)
+            
+            # Rerank documents
+            reranker = CrossEncoderReranker()
+            reranked_parents = reranker.rerank(
+                query=question,
+                documents=parent_results,
+            )
+            
+            # Generate answer with new context
+            return self.invoke_with_history(
+                question=question,
+                context_documents=reranked_parents,
+                conversation_history=conversation_history,
+            )
+            
+        except Exception as e:
+            logger.error(f"Fallback retrieval failed: {e}")
+            return {
+                "answer": (
+                    "Maaf, terjadi kesalahan saat mencari informasi. "
+                    "Silakan coba lagi atau konsultasikan dengan Dosen Pembimbing."
+                ),
+                "sources": []
+            }
 
     def stream(
         self,
