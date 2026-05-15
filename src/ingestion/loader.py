@@ -65,7 +65,6 @@ def validate_parent_child_links(
     parents: list[dict], children: list[dict]
 ) -> bool:
     child_ids_set = {c["id"] for c in children}
-    parent_ids_set = {p["parent_id"] for p in parents}
 
     for parent in parents:
         for cid in parent["child_ids"]:

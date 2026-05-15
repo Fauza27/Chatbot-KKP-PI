@@ -8,7 +8,6 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-# Key: session_id (string), Value: ConversationMemory
 _session_store: dict[str, ConversationMemory] = {}
 
 _classifier = IntentClassifier()
