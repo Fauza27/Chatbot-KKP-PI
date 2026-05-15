@@ -1,7 +1,7 @@
+"""Main intent classifier implementation."""
+
 import json
 from typing import Tuple
-from dataclasses import dataclass
-from enum import Enum
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -9,33 +9,8 @@ from loguru import logger
 
 from config.settings import get_settings
 from src.generation.memory import ConversationMemory, IntentType
-
-
-class SwitchType(Enum):
-    NONE = "none"
-    TOPIC = "topic"
-    DOMAIN = "domain"
-    ASPECT = "aspect"
-
-
-@dataclass
-class ClassificationResult:
-    intent: IntentType
-    confidence: float
-    reason: str
-    switch_type: SwitchType = SwitchType.NONE
-    switch_reason: str = ""
-
-
-@dataclass
-class SwitchDetectionResult:
-    has_switch: bool
-    switch_type: SwitchType
-    reason: str
-
 from .constants import CLASSIFIER_SYSTEM_PROMPT
 from .detectors import SwitchDetector, ClarificationDetector, ConversationalDetector
-from .models import ClassificationResult, SwitchType
 
 
 def _build_classifier_prompt(
@@ -180,10 +155,3 @@ class IntentClassifier:
         except (json.JSONDecodeError, KeyError, Exception) as e:
             logger.warning(f"Classifier error: {e} → fallback NEEDS_RETRIEVAL")
             return IntentType.NEEDS_RETRIEVAL, 0.5, f"Fallback due to error: {e}"
-
-
-# Backward compatibility - expose main functions at module level
-from .classifier import IntentClassifier
-from .reformulator import reformulate_query
-
-__all__ = ["IntentClassifier", "reformulate_query"]
