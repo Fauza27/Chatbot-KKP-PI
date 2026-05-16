@@ -150,13 +150,23 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
 
 
 def _postprocess_answer(answer: str) -> str:
-    # Strip leading whitespace/newlines
+    """
+    Membersihkan formatting whitespace pada jawaban LLM.
+
+    Catatan: penghapusan preamble dan meta-reference TIDAK dilakukan di sini —
+    SYSTEM_PROMPT sudah mengarahkan LLM untuk selalu memulai jawaban dengan
+    sumber ("Berdasarkan BAB X Buku Panduan ..."), dan eksperimen pada 94
+    jawaban hasil evaluasi menunjukkan tidak ada preamble yang muncul.
+    Kalau di kemudian hari preamble kembali muncul, tambahkan logika strip
+    di sini.
+    """
+    # Strip leading/trailing whitespace
     answer = answer.strip()
-    
-    # Clean up extra whitespace
+
+    # Rapikan baris kosong berlebih dan spasi ganda
     answer = re.sub(r'\n{3,}', '\n\n', answer)
     answer = re.sub(r'  +', ' ', answer)
-    
+
     return answer.strip()
 
 
@@ -246,7 +256,7 @@ class RAGChain:
             "question": question,
         })
         
-        # Apply post-processing to remove preambles and meta-references
+        # Whitespace cleanup (preamble dihandle oleh SYSTEM_PROMPT)
         answer = _postprocess_answer(answer)
 
         result: dict[str, str | list] = {"answer": answer}
@@ -295,7 +305,7 @@ class RAGChain:
         messages.append(HumanMessage(content=human_content))
 
         response = self._llm.invoke(messages)
-        answer = response.content
+        answer = _postprocess_answer(response.content)
 
         result: dict[str, str | list] = {"answer": answer}
 
@@ -328,7 +338,7 @@ class RAGChain:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=prompt_text),
         ])
-        answer = response.content
+        answer = _postprocess_answer(response.content)
 
         logger.success(f"Conversational jawaban: {len(answer)} karakter")
         return {"answer": answer, "sources": []}
@@ -378,7 +388,7 @@ class RAGChain:
             HumanMessage(content=prompt_text),
         ])
 
-        answer = response.content
+        answer = _postprocess_answer(response.content)
         logger.success(f"Clarification jawaban: {len(answer)} karakter")
 
         return {
@@ -509,7 +519,7 @@ def generate_answer(question: str, context: str) -> str:
         "question": question,
     })
     
-    # Apply post-processing to remove preambles and meta-references
+    # Whitespace cleanup (preamble dihandle oleh SYSTEM_PROMPT)
     answer = _postprocess_answer(answer)
 
     logger.info(f"Answer generated: {len(answer)} chars")
