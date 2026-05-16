@@ -67,7 +67,7 @@ def expand_query(question: str) -> str:
         logger.debug("Query expansion: ukuran kertas")
     
     # 12. Durasi Ujian
-    if "durasi" in question_lower or "lama" in question_lower and "ujian" in question_lower:
+    if ("durasi" in question_lower or "lama" in question_lower) and "ujian" in question_lower:
         keywords.extend(["60 menit", "10 menit", "presentasi", "tanya jawab", "50 menit"])
         logger.debug("Query expansion: durasi ujian")
     

@@ -80,24 +80,3 @@ class ParentChildFetcher:
             logger.warning("No parents found")
 
         return parents
-
-    def format_context(self, parents: list[dict], max_parents: int = 10) -> str:
-        if not parents:
-            return "No context found."
-
-        context_parts = []
-        for i, parent in enumerate(parents[:max_parents], 1):
-            section = parent.get("section", "Unknown")
-            title = parent.get("title", "Untitled")
-            content = parent.get("content", "")
-            matched = parent.get("matched_children", [])
-
-            context_parts.append(
-                f"── Dokumen {i} ──\n"
-                f"Bagian: {section}\n"
-                f"Judul: {title}\n"
-                f"Child chunks relevan: {', '.join(matched)}\n"
-                f"\n{content}\n"
-            )
-
-        return "\n".join(context_parts)
