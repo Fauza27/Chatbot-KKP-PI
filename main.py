@@ -133,8 +133,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
             {
                 "child_id": r.child_id,
                 "hybrid_score": round(r.hybrid_score, 4),
-                "dense_score": round(r.dense_score, 4),
-                "bm25_score": round(r.bm25_score, 4),
             }
             for r in search_results[:5]
         ],
@@ -146,8 +144,6 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
             logger.debug(
                 f"  [{i}] {r.child_id} | "
                 f"hybrid={r.hybrid_score:.4f} | "
-                f"dense={r.dense_score:.4f} | "
-                f"bm25={r.bm25_score:.4f} | "
                 f"{title}"
             )
 

@@ -26,7 +26,7 @@ Buat saya, proyek ini bukan sekadar tugas atau portofolio. Saya ingin benar-bena
 - **Query Reformulation**: Mengubah pertanyaan yang menggunakan referensi implisit ("itu", "tersebut") menjadi query yang mandiri
 
 ### 🔍 Sistem Pencarian Canggih
-- **Hybrid Search**: Kombinasi BM25 (keyword-based) dan Dense Vector Search untuk hasil yang lebih akurat
+- **Hybrid Search**: Kombinasi PostgreSQL FTS (dengan Snowball stemmer Indonesia) dan Dense Vector Search yang dijalankan di database untuk performa optimal
 - **Parent-Child Chunking**: Mempertahankan konteks dokumen yang utuh sambil memungkinkan pencarian granular
 - **Cross-Encoder Reranking**: Penyaringan ulang hasil pencarian menggunakan model lokal untuk relevansi maksimal
 - **Self-Query Extraction**: Ekstraksi otomatis filter metadata dari pertanyaan natural
@@ -74,9 +74,9 @@ Gambaran besar tentang bagaimana infrastruktur ini meramu dan memecahkan setiap 
 │  ┌────────▼──────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │   Self-Query      │  │    Hybrid    │  │   Parent-    │  │
 │  │   Extraction      │→ │    Search    │→ │    Child     │  │
-│  │  (Metadata Filter)│  │  (BM25+Dense)│  │   Fetching   │  │
-│  └───────────────────┘  └──────────────┘  └──────┬───────┘  │
-│                                                    │          │
+│  │  (Metadata Filter)│  │ (DB-side FTS │  │   Fetching   │  │
+│  └───────────────────┘  │  + Vector)   │  └──────┬───────┘  │
+│                         └──────────────┘         │          │
 │  ┌───────────────────┐  ┌──────────────┐  ┌──────▼───────┐  │
 │  │   LLM Generation  │← │  Cross-Encoder│← │   Reranking  │  │
 │  │   (GPT-4o/Opus)   │  │   Reranking   │  │  (Top-N)     │  │
@@ -102,7 +102,7 @@ Saya tidak asal ikut tren atau sekadar memakai teknologi yang sedang hype. Setia
 
 - **FastAPI**: Aplikasi ini harus menangani REST API sekaligus menerima trafik rutin dari webhook Telegram. Karena itu, saya butuh framework yang memang dirancang asynchronous sejak awal. FastAPI jadi pilihan karena ringan, cepat, dan tetap stabil meskipun dijalankan di layanan cloud gratis.
 
-- **Supabase (pgvector)**: Mengelola database relasional dan vector database secara terpisah bisa jadi cukup merepotkan. Supabase menawarkan solusi praktis lewat PostgreSQL yang sudah dilengkapi ekstensi pgvector. Dengan ini, saya bisa menyimpan struktur dokumen (misalnya relasi antar bab) sekaligus embedding-nya dalam satu sistem yang rapi dan terintegrasi.
+- **Supabase (pgvector)**: Mengelola database relasional dan vector database secara terpisah bisa jadi cukup merepotkan. Supabase menawarkan solusi praktis lewat PostgreSQL yang sudah dilengkapi ekstensi pgvector. Dengan ini, saya bisa menyimpan struktur dokumen (misalnya relasi antar bab) sekaligus embedding-nya dalam satu sistem yang rapi dan terintegrasi. Hybrid search (BM25 + vector) juga dijalankan langsung di database menggunakan `to_tsvector('indonesian')` yang memiliki stemmer bahasa Indonesia bawaan, memberikan hasil yang lebih akurat dibanding tokenisasi manual.
 
 - **Cross-Encoder Model (`ms-marco`)**: Salah satu kendala terbesar penelusuran dokumen murni adalah ketidakmampuan algoritma *vector search* menangkap maksud sebenarnya dari pertanyaan pengguna dan menghasilkan dokumen tidak relevan. Menggunakan LLM seperti GPT-4 untuk reranking sebenarnya efektif, tapi jelas mahal kalau dipakai terus-menerus. Sebagai gantinya, saya menggunakan model Cross-Encoder kecil yang dijalankan secara lokal di CPU. Performanya cukup baik untuk menyaring dan mengurutkan hasil pencarian, tanpa tambahan biaya API.
 
@@ -126,10 +126,11 @@ Salah satu aspek yang paling menantang dalam membangun chatbot RAG adalah membua
 - **Conversational**: Sapaan, ucapan terima kasih, pertanyaan umum
 - **Clarification**: Permintaan elaborasi dari jawaban sebelumnya
 
-### 🧠 Memory Management
-- **Session-based Memory**: Setiap pengguna memiliki memori percakapan terpisah
-- **Window Memory**: Menyimpan 5 turn terakhir untuk efisiensi
+### 💭 Memory Management & Session Handling
+- **Session-based Memory**: Setiap pengguna memiliki memori percakapan terpisah dengan TTL + LRU eviction
+- **Window Memory**: Menyimpan 5 turn terakhir untuk efisiensi dengan automatic cleanup
 - **Context Preservation**: Mempertahankan konteks dokumen yang relevan untuk klarifikasi
+- **Async Processing**: Non-blocking I/O operations untuk performa optimal
 
 ### 🔧 Query Processing
 - **Query Reformulation**: Mengubah pertanyaan dengan referensi implisit menjadi query mandiri
@@ -170,6 +171,12 @@ Buka file `.env` dan isi dengan kredensial yang diperlukan: OpenAI API Key, Supa
 
 **2. Setup Database**
 Jalankan script SQL di `scripts/supabase.sql` melalui SQL Editor di dashboard Supabase Anda. Script ini akan membuat tabel dan index yang diperlukan untuk vector search.
+
+**Penting**: Setelah menjalankan script utama, jalankan juga migration untuk quota system:
+```sql
+-- Copy-paste isi file scripts/supabase_migration_quota_rpc.sql ke SQL Editor
+-- Script ini menambahkan fungsi RPC untuk atomic quota management
+```
 
 **3. Ingestion Pipeline**
 ```bash
@@ -212,12 +219,17 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 - **Context Switch Detection**: 100% success rate pada testing
 - **Query Understanding**: Mampu menangani bahasa informal dan typo
 - **Response Relevance**: Konsisten memberikan jawaban yang akurat dan kontekstual
+- **System Reliability**: TTL-based session management mencegah memory leaks
+- **Performance**: Async processing untuk response time yang optimal
 
 ### 🔧 Optimisasi yang Dilakukan
 1. **Enhanced Intent Classifier**: Sistem deteksi switching yang lebih akurat
-2. **Improved Memory Management**: Pengelolaan konteks percakapan yang lebih efisien  
-3. **Better Query Reformulation**: Penanganan referensi implisit yang lebih baik
-4. **Fallback Mechanisms**: Sistem fallback untuk situasi edge case
+2. **Improved Memory Management**: Session management dengan TTL + LRU eviction untuk mencegah memory leaks
+3. **Async Performance**: Non-blocking I/O operations untuk mencegah event loop blocking
+4. **Better Query Reformulation**: Penanganan referensi implisit yang lebih baik
+5. **Centralized Messaging**: Sistem pesan terpusat dengan HTML formatting yang konsisten
+6. **Code Quality**: Penghapusan dead code dan perbaikan dependencies untuk maintainability
+7. **Fallback Mechanisms**: Sistem fallback untuk situasi edge case
 
 ---
 
@@ -250,5 +262,21 @@ Sistem ini telah mencapai status **production-ready** dengan:
 - ✅ Dokumentasi lengkap dan ADR yang terstruktur
 - ✅ Evaluasi objektif menggunakan RAGAS
 - ✅ Optimisasi performa dan akurasi yang berkelanjutan
+
+### 🔄 Update Terbaru (Mei 2026)
+- **Performance & Reliability Improvements**: 
+  - Session management dengan TTL + LRU eviction untuk mencegah memory leaks
+  - Async optimization untuk mencegah event loop blocking pada operasi I/O
+  - Centralized messaging system dengan HTML formatting yang konsisten
+  - Removal of hard-coded values, sekarang menggunakan konfigurasi dari settings
+- **Code Quality Enhancements**:
+  - Penghapusan ~170 baris dead code dari retrieval modules
+  - Perbaikan circular import dependencies
+  - Consistent post-processing untuk semua chain methods
+  - Enhanced security dengan proper input sanitization warnings
+- **Previous Updates (Januari 2026)**:
+  - **Hybrid Search Optimization**: Migrasi BM25 processing ke PostgreSQL untuk performa yang lebih baik dan konsistensi linguistik (Snowball stemmer Indonesia)
+  - **Atomic Quota System**: Implementasi RPC untuk menghindari race condition pada sistem quota harian Telegram bot
+  - **Enhanced Security**: HTML escaping untuk Telegram messages dan reuse connection untuk efisiensi resource
 
 Proyek ini tidak hanya berhasil memecahkan masalah awal (membantu mahasiswa memahami panduan KKP/PI), tapi juga menjadi pembelajaran mendalam tentang bagaimana membangun sistem RAG yang benar-benar siap digunakan di dunia nyata.
