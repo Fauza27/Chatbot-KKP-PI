@@ -1,4 +1,6 @@
 from typing import Dict, Any, Optional
+import time
+from threading import Lock
 from loguru import logger
 
 from src.generation.memory import ConversationMemory, IntentType
@@ -8,7 +10,10 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-_session_store: dict[str, ConversationMemory] = {}
+# In-memory session store dengan TTL & LRU eviction.
+# Key: session_id, Value: (ConversationMemory, last_access_unix_ts)
+_session_store: dict[str, tuple[ConversationMemory, float]] = {}
+_session_lock = Lock()
 
 _classifier = IntentClassifier()
 _rag_chain = RAGChain()
@@ -24,29 +29,67 @@ class RetrievalError(ChatError):
     pass
 
 
+def _evict_idle_sessions(now: float) -> int:
+    """Hapus session yang idle melebihi SESSION_CLEANUP_INTERVAL detik."""
+    ttl = settings.SESSION_CLEANUP_INTERVAL
+    expired = [sid for sid, (_, last_ts) in _session_store.items() if now - last_ts > ttl]
+    for sid in expired:
+        _session_store.pop(sid, None)
+    if expired:
+        logger.info(f"Evicted {len(expired)} idle session(s)")
+    return len(expired)
+
+
+def _evict_lru_if_full() -> None:
+    """Jika store sudah penuh, hapus session paling lama tidak diakses (LRU)."""
+    cap = settings.MAX_ACTIVE_SESSIONS
+    if len(_session_store) <= cap:
+        return
+    # Sort by last_access_ts ascending; buang sampai cap.
+    overflow = len(_session_store) - cap
+    sorted_items = sorted(_session_store.items(), key=lambda kv: kv[1][1])
+    for sid, _ in sorted_items[:overflow]:
+        _session_store.pop(sid, None)
+    logger.info(f"Evicted {overflow} LRU session(s) due to MAX_ACTIVE_SESSIONS cap")
+
+
 def get_or_create_memory(session_id: str) -> ConversationMemory:
-    """Get or create conversation memory for a session"""
-    if session_id not in _session_store:
-        _session_store[session_id] = ConversationMemory(max_turns=5)
-    return _session_store[session_id]
+    """Get or create conversation memory for a session, dengan TTL & LRU eviction."""
+    now = time.time()
+    with _session_lock:
+        # Lazy cleanup setiap kali ada akses; murah karena cuma scan dict di-memori.
+        _evict_idle_sessions(now)
+
+        existing = _session_store.get(session_id)
+        if existing is not None:
+            memory, _ = existing
+            _session_store[session_id] = (memory, now)
+            return memory
+
+        memory = ConversationMemory(max_turns=5)
+        _session_store[session_id] = (memory, now)
+        _evict_lru_if_full()
+        return memory
 
 
 def clear_session(session_id: str) -> bool:
     """Clear conversation memory for a session"""
-    if session_id in _session_store:
-        del _session_store[session_id]
-        logger.info(f"Session {session_id} cleared")
-        return True
+    with _session_lock:
+        if session_id in _session_store:
+            del _session_store[session_id]
+            logger.info(f"Session {session_id} cleared")
+            return True
     return False
 
 
 def get_session_stats() -> Dict[str, Any]:
     """Get statistics about active sessions"""
-    return {
-        "active_sessions": len(_session_store),
-        "total_turns": sum(m.turn_count for m in _session_store.values()),
-        "sessions": list(_session_store.keys()),
-    }
+    with _session_lock:
+        return {
+            "active_sessions": len(_session_store),
+            "total_turns": sum(m.turn_count for m, _ in _session_store.values()),
+            "sessions": list(_session_store.keys()),
+        }
 
 
 def chat(query: str, session_id: str) -> Dict[str, Any]:

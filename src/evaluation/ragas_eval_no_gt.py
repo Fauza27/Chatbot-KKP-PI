@@ -658,15 +658,9 @@ def run_full_evaluation_no_gt(rag_pipeline_func, dataset: str = "both") -> tuple
 # ENTRY POINT
 # ============================================================
 
-if __name__ == "__main__":
-    from main import run_rag_pipeline
-
-    logger.info("Starting RAGAS evaluation WITHOUT ground truth...")
-    results, main_file, review_file = run_full_evaluation_no_gt(
-        run_rag_pipeline, dataset="both"
-    )
-
-    logger.info(f"\n✅ Evaluation complete!")
-    logger.info(f"Main results : {main_file}")
-    if review_file:
-        logger.info(f"Manual review: {review_file}  ← cek ini dulu sebelum iterasi")
+# Catatan: entry point CLI sengaja dipindah ke `main.py`
+# (subcommand `--evaluate-no-gt`). Modul evaluasi di dalam src/ tidak
+# boleh mengimport `main.py` di root karena membuat dependency terbalik.
+#
+# Untuk menjalankan evaluasi gunakan:
+#     python main.py --evaluate-no-gt --dataset both
