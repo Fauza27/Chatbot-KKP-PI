@@ -37,8 +37,7 @@ def test_single_question(question: str):
     print("\nTop 10 results:")
     for i, r in enumerate(search_results[:10], 1):
         title = r.document.metadata.get("title", "")[:60]
-        print(f"  [{i:2d}] {r.child_id:8s} | hybrid={r.hybrid_score:.4f} | "
-              f"dense={r.dense_score:.4f} | bm25={r.bm25_score:.4f}")
+        print(f"  [{i:2d}] {r.child_id:8s} | hybrid={r.hybrid_score:.4f}")
         print(f"       {title}")
         # Print snippet dari content
         content_snippet = r.document.page_content[:150].replace('\n', ' ')
