@@ -2,13 +2,11 @@ import logging
 
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
-from telegram.ext import(
+from telegram.ext import (
     Application,
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 from src.bot import messages
@@ -17,42 +15,26 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Unhandled exception", exc_info=context.error)
 
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "Maaf, terjadi kesalahan\\. Silakan coba lagi\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
+                messages.GENERIC_ERROR,
+                parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
 
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = """
-🤖 *Bantuan Chatbot KKP/PI*
-
-Saya adalah asisten yang dapat membantu Anda dengan pertanyaan seputar:
-• Kuliah Kerja Praktik \\(KKP\\)
-• Penulisan Ilmiah \\(PI\\)
-
-*Cara menggunakan:*
-• Ketik pertanyaan Anda langsung
-• Contoh: "Apa syarat untuk mengambil KKP?"
-• Contoh: "Bagaimana format penulisan PI?"
-
-*Perintah yang tersedia:*
-/start \\- Mulai percakapan
-/help \\- Tampilkan bantuan ini
-
-Silakan ajukan pertanyaan Anda\\!
-    """.strip()
-    
     await update.message.reply_text(
-        help_text,
-        parse_mode=ParseMode.MARKDOWN_V2,
+        messages.HELP,
+        parse_mode=ParseMode.HTML,
     )
+
 
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
@@ -61,6 +43,7 @@ async def post_init(application: Application) -> None:
             BotCommand("help", "Lihat bantuan"),
         ]
     )
+
 
 def create_bot() -> Application:
     settings = get_settings()

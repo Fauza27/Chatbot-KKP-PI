@@ -1,10 +1,13 @@
+import asyncio
+import html
 import logging
 from datetime import datetime
+from functools import lru_cache
 
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes, MessageHandler, filters
-from supabase import create_client
+from supabase import create_client, Client
 
 from config.settings import get_settings
 from src.bot import messages
@@ -12,61 +15,84 @@ from src.services.ai_services import chat
 
 logger = logging.getLogger(__name__)
 
-DAILY_LIMIT = 13
+
+@lru_cache(maxsize=1)
+def _get_supabase_client() -> Client:
+    """Reuse single Supabase client instance across requests."""
+    settings = get_settings()
+    return create_client(settings.supabase_url, settings.supabase_service_key)
+
 
 def check_and_update_quota(user_id: str) -> bool:
-    settings = get_settings()
-    supabase = create_client(settings.supabase_url, settings.supabase_service_key)
-    
+    """
+    Atomically increment quota and check daily limit via RPC.
+
+    Returns True if user is still under the daily limit and quota was incremented.
+    Returns False if user has reached the limit.
+    Falls back to allow on DB error so the system does not block users due to infra issues.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
-    
+    settings = get_settings()
+    daily_limit = settings.RATE_LIMIT_REQUESTS
+
     try:
-        response = supabase.table("user_quotas").select("*").eq("user_id", user_id).eq("date", today).execute()
-        data = response.data
-        
-        if not data:
-            supabase.table("user_quotas").insert({
-                "user_id": user_id,
-                "date": today,
-                "message_count": 1
-            }).execute()
-            return True
-        
-        current_count = data[0]["message_count"]
-        if current_count >= DAILY_LIMIT:
-            return False
-            
-        supabase.table("user_quotas").update({
-            "message_count": current_count + 1
-        }).eq("user_id", user_id).eq("date", today).execute()
-        
-        return True
+        supabase = _get_supabase_client()
+        response = supabase.rpc(
+            "increment_quota_if_under_limit",
+            {
+                "p_user_id": user_id,
+                "p_date": today,
+                "p_daily_limit": daily_limit,
+            },
+        ).execute()
+
+        # RPC returns boolean: True = allowed (and incremented), False = limit reached
+        return bool(response.data)
     except Exception as e:
         logger.error(f"Error checking quota for user {user_id}: {e}")
-        # Jika gagal cek database, beri izin agar tidak memblokir sistem
+        # If DB call fails, allow the request to avoid blocking legitimate users
         return True
+
 
 def log_chat_to_db(user_id: str, username: str, question: str, answer: str) -> None:
     try:
-        settings = get_settings()
-        supabase = create_client(settings.supabase_url, settings.supabase_service_key)
-        
+        supabase = _get_supabase_client()
         supabase.table("chat_logs").insert({
             "user_id": user_id,
             "username": username,
             "question": question,
-            "answer": answer
+            "answer": answer,
         }).execute()
     except Exception as e:
         logger.error(f"Gagal menyimpan log chat untuk user {user_id}: {e}")
 
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    
+
     await update.message.reply_text(
         messages.WELCOME.format(first_name=user.first_name),
         parse_mode=ParseMode.HTML,
     )
+
+
+def _format_source_line(source: dict) -> str:
+    """Build one source line with HTML-escaped values to avoid Telegram parse errors."""
+    section = source.get("section", "") or ""
+    title = source.get("title", "") or ""
+    parent_id = source.get("parent_id", "") or ""
+
+    if section and title and section != title:
+        source_name = f"{section} — {title}"
+    else:
+        source_name = title or section or "Buku Panduan"
+
+    panduan_type = "PI" if "pi" in parent_id.lower() else "KKP"
+
+    safe_name = html.escape(source_name)
+    safe_panduan = html.escape(panduan_type)
+    return f"  • {safe_name} (Buku Panduan {safe_panduan})\n"
+
 
 async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
@@ -78,60 +104,52 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     chat_id = update.effective_chat.id
     user_id = str(update.effective_user.id)
+    settings = get_settings()
 
-    # Cek limit harian sebelum memproses pertanyaan
-    has_quota = check_and_update_quota(user_id)
+    # Cek limit harian sebelum memproses pertanyaan.
+    # Supabase client adalah sync, jalankan di thread pool agar event loop tidak terblokir.
+    has_quota = await asyncio.to_thread(check_and_update_quota, user_id)
     if not has_quota:
         await update.message.reply_text(
-            "⚠️ <b>Batas Limit Harian Tercapai</b>\n\n"
-            "Maaf, Anda telah menggunakan jatah 13 pertanyaan untuk hari ini "
-            "guna menghemat biaya server. Silakan kembali lagi besok hari ya! 🎓",
-            parse_mode=ParseMode.HTML
+            messages.DAILY_LIMIT_REACHED.format(limit=settings.RATE_LIMIT_REQUESTS),
+            parse_mode=ParseMode.HTML,
         )
         return
 
+    loading_message = None
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        
+
         # Kirim pesan loading sementara
         loading_message = await update.message.reply_text(
-            "⏳ Sedang mencari jawaban...",
+            messages.LOADING,
             parse_mode=ParseMode.HTML,
         )
 
-        response = chat(
+        # `chat()` melakukan I/O sinkron (OpenAI + Supabase), pindahkan ke thread pool.
+        response = await asyncio.to_thread(
+            chat,
             query=text,
             session_id=user_id,
         )
 
         reply_text = (response.get("answer", "")).strip()
         if not reply_text:
-            reply_text = "Maaf, saya belum bisa menjawab sekarang."
+            reply_text = messages.EMPTY_ANSWER_FALLBACK
+
+        # Escape jawaban agar karakter <, >, & tidak memecah parsing HTML Telegram
+        safe_reply = html.escape(reply_text)
 
         sources = response.get("sources", [])
         if sources:
             source_text = "\n\n📚 Sumber:\n"
             for s in sources:
-                section = s.get("section", "")
-                title = s.get("title", "")
-                
-                # Biar rapi, gabungkan section dan title jika beda
-                if section and title and section != title:
-                    source_name = f"{section} — {title}"
-                else:
-                    source_name = title or section or "Buku Panduan"
-                
-                # Cek panduan mana
-                parent_id = s.get("parent_id", "")
-                panduan_type = "PI" if "pi" in parent_id.lower() else "KKP"
-                
-                source_text += f"  • {source_name} (Buku Panduan {panduan_type})\n"
-            
-            reply_text += source_text
+                source_text += _format_source_line(s)
+            safe_reply += source_text
 
         # Update pesan loading dengan jawaban akhir
         await loading_message.edit_text(
-            f"🤖 {reply_text}",
+            f"🤖 {safe_reply}",
             parse_mode=ParseMode.HTML,
         )
 
@@ -139,22 +157,24 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if num_docs > 0:
             logger.info(f"Chat response sent to user {user_id}, used {num_docs} documents")
 
-        # Catat ke database untuk monitoring
+        # Catat ke database untuk monitoring (jangan blok event loop)
         username = update.effective_user.username or update.effective_user.first_name or "Unknown"
-        # Gunakan bot.loop (jika ada) atau panggil secara sinkron, supabase-py by default sinkron
-        log_chat_to_db(user_id, username, text, reply_text)
+        asyncio.create_task(
+            asyncio.to_thread(log_chat_to_db, user_id, username, text, reply_text)
+        )
 
-    except Exception as exc:
+    except Exception:
         logger.exception(f"Unexpected error in text chat handler for user {user_id}")
-        error_text = "Maaf, terjadi kesalahan. Silakan coba lagi."
-        
+        error_text = messages.GENERIC_ERROR
+
         try:
-            if 'loading_message' in locals():
+            if loading_message is not None:
                 await loading_message.edit_text(error_text, parse_mode=ParseMode.HTML)
             else:
                 await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
         except Exception:
             pass
+
 
 def build_text_chat_handler() -> MessageHandler:
     return MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_chat)
