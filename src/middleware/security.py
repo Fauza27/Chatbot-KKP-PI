@@ -155,7 +155,15 @@ def verify_telegram_webhook(request_body: bytes, signature: str) -> bool:
 
 
 def sanitize_input(text: str, max_length: int = 1000) -> str:
-    """Sanitize user input"""
+    """Sanitize user input.
+
+    PERINGATAN: whitelist di sini cukup ketat dan akan menghapus karakter
+    Unicode (mis. è, ñ, é) serta sebagian tanda baca yang umum dipakai
+    dalam pertanyaan natural Indonesia. Saat ini fungsi ini TIDAK dipanggil
+    di chat path (lihat search dengan `validate_chat_input`). Jangan
+    pakai fungsi ini untuk membersihkan pertanyaan user tanpa terlebih
+    dulu melonggarkan whitelist regex di bawah.
+    """
     if not text:
         return ""
     
