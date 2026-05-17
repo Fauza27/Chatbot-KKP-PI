@@ -1,129 +1,104 @@
 """
-Query Expansion untuk meningkatkan recall pada pertanyaan spesifik
+Query Expansion — versi netral.
+
+Versi sebelumnya menyusupkan jawaban (mis. "40", "halaman", "30%", "kemeja putih")
+ke query saat user menanyakan topik tertentu. Praktik tersebut bias evaluasi
+karena keyword jawaban dipaksa masuk ke retrieval. Versi ini hanya melakukan
+ekspansi linguistik yang netral: memperluas akronim/singkatan akademik agar
+matching FTS dan vector lebih konsisten, TANPA membocorkan jawaban.
+
+Aturan:
+- Akronim huruf kapital (PI, KKP, SKS, IPK, dst.) di-expand ke bentuk panjang
+  HANYA kalau muncul dalam tulisan kapital. Ini menghindari false positive
+  pada kata Indonesia umum (mis. "apa" tidak akan dianggap sebagai akronim
+  "APA" / American Psychological Association).
+- Bentuk panjang (case-insensitive) di-expand ke akronim agar matching FTS
+  konsisten dua arah.
+- Tidak ada angka, satuan, atau frasa jawaban yang ditambahkan.
 """
 
+from __future__ import annotations
+
+import re
 from loguru import logger
 
 
+# Akronim huruf kapital → bentuk panjang. Match dilakukan **case-sensitive**
+# pada bentuk uppercase utuh untuk menghindari false positive (mis. "Apa"
+# bukan akronim "APA").
+UPPERCASE_ACRONYMS: dict[str, list[str]] = {
+    "PI": ["Penulisan Ilmiah"],
+    "KKP": ["Kuliah Kerja Praktik", "Kuliah Kerja Praktek"],
+    "SKS": ["Satuan Kredit Semester"],
+    "IPK": ["Indeks Prestasi Kumulatif"],
+    "KRS": ["Kartu Rencana Studi"],
+    "BAAK": ["Biro Administrasi Akademik dan Kemahasiswaan"],
+    "BAUK": ["Biro Administrasi Umum dan Keuangan"],
+    "BKK": ["Bursa Kerja Khusus"],
+    "EYD": ["Ejaan Yang Disempurnakan"],
+}
+
+# Bentuk panjang → akronim. Match case-insensitive karena bentuk panjang
+# tidak ambigu dengan kata umum.
+LONG_FORM_TO_ACRONYM: dict[str, list[str]] = {
+    "penulisan ilmiah": ["PI"],
+    "kuliah kerja praktik": ["KKP"],
+    "kuliah kerja praktek": ["KKP"],
+    "satuan kredit semester": ["SKS"],
+    "indeks prestasi kumulatif": ["IPK"],
+    "kartu rencana studi": ["KRS"],
+}
+
+
+def _has_uppercase_token(text: str, token: str) -> bool:
+    """Cek apakah token (case-sensitive, uppercase) muncul sebagai kata utuh."""
+    return re.search(rf"\b{re.escape(token)}\b", text) is not None
+
+
+def _has_phrase(text_lower: str, phrase: str) -> bool:
+    """Cek substring frasa di text yang sudah lowercase."""
+    return phrase in text_lower
+
+
 def expand_query(question: str) -> str:
-    
-    question_lower = question.lower()
-    expanded = question
-    keywords = []
-    
-    # 1. Pakaian / Dress Code
-    if any(word in question_lower for word in ["pakaian", "ketentuan pakaian", "dress code", "berpakaian"]):
-        keywords.extend(["ujian", "seminar", "kemeja", "putih", "almamater", "celana", "rok", "hitam", "jilbab"])
-        logger.debug("Query expansion: pakaian ujian")
-    
-    # 2. Abstrak - Maksimal Kata
-    if "abstrak" in question_lower and any(word in question_lower for word in ["maksimal", "kata", "panjang"]):
-        keywords.extend(["300", "kata", "maksimal", "abstrak", "satu halaman", "ringkas"])
-        logger.debug("Query expansion: abstrak maksimal kata")
-    
-    # 3. Kata Kunci / Keywords
-    if any(word in question_lower for word in ["kata kunci", "keyword"]):
-        keywords.extend(["3-5", "kata kunci", "keywords", "abstrak", "minimal", "maksimal", "jumlah", "berapa"])
-        logger.debug("Query expansion: kata kunci abstrak")
-    
-    # 4. Sampul / Cover
-    if any(word in question_lower for word in ["sampul", "cover", "halaman depan"]):
-        keywords.extend(["judul", "nama", "nim", "logo", "program studi", "tahun", "halaman", "sampul", "elemen", "berisi", "fakultas", "universitas", "STMIK", "Widya Cipta Dharma"])
-        logger.debug("Query expansion: elemen sampul")
-    
-    # 5. Minimal Halaman
-    if ("minimal" in question_lower or "berapa" in question_lower) and "halaman" in question_lower:
-        keywords.extend(["40", "halaman", "minimal", "laporan", "naskah", "jumlah", "tidak termasuk", "lampiran", "KKP", "PI"])
-        logger.debug("Query expansion: minimal halaman")
-    
-    # 6. Jumlah Referensi
-    if any(word in question_lower for word in ["jumlah", "minimal"]) and "referensi" in question_lower:
-        keywords.extend(["15", "referensi", "daftar pustaka", "minimal", "80%", "buku", "jurnal"])
-        logger.debug("Query expansion: jumlah referensi")
-    
-    # 7. Format Daftar Pustaka
-    if "format" in question_lower and any(word in question_lower for word in ["daftar pustaka", "referensi"]):
-        keywords.extend(["APA", "American Psychological Association", "format", "penulisan", "sitasi"])
-        logger.debug("Query expansion: format daftar pustaka")
-    
-    # 8. Spasi / Spacing
-    if "spasi" in question_lower and any(word in question_lower for word in ["naskah", "penulisan", "laporan"]):
-        keywords.extend(["1,5", "spasi", "1.5", "penulisan", "naskah", "utama"])
-        logger.debug("Query expansion: spasi penulisan")
-    
-    # 9. Font / Jenis Huruf
-    if any(word in question_lower for word in ["font", "huruf", "jenis huruf"]):
-        keywords.extend(["Times New Roman", "12", "font", "ukuran", "jenis"])
-        logger.debug("Query expansion: font")
-    
-    # 10. Margin
-    if "margin" in question_lower:
-        keywords.extend(["4 cm", "3 cm", "margin", "kiri", "kanan", "atas", "bawah"])
-        logger.debug("Query expansion: margin")
-    
-    # 11. Ukuran Kertas
-    if "ukuran kertas" in question_lower or "kertas" in question_lower:
-        keywords.extend(["A4", "21 cm", "29.7 cm", "HVS", "80 gram"])
-        logger.debug("Query expansion: ukuran kertas")
-    
-    # 12. Durasi Ujian
-    if ("durasi" in question_lower or "lama" in question_lower) and "ujian" in question_lower:
-        keywords.extend(["60 menit", "10 menit", "presentasi", "tanya jawab", "50 menit"])
-        logger.debug("Query expansion: durasi ujian")
-    
-    # 13. Nilai Minimal Lulus
-    if "nilai" in question_lower and any(word in question_lower for word in ["minimal", "lulus"]):
-        keywords.extend(["C", "60", "nilai", "minimal", "lulus", "predikat"])
-        logger.debug("Query expansion: nilai minimal")
-    
-    # 14. Tingkat Kemiripan / Plagiarisme
-    if any(word in question_lower for word in ["kemiripan", "plagiarisme", "plagiasi"]):
-        keywords.extend(["30%", "maksimal", "kemiripan", "plagiarisme", "turnitin"])
-        logger.debug("Query expansion: plagiarisme")
-    
-    # 15. Dosen Pembimbing / Penguji
-    if "dosen" in question_lower and any(word in question_lower for word in ["pembimbing", "penguji", "jumlah"]):
-        keywords.extend(["1 dosen", "2 dosen", "pembimbing", "penguji", "jumlah"])
-        logger.debug("Query expansion: dosen pembimbing/penguji")
-    
-    # 16. Jabatan Fungsional
-    if "jabatan" in question_lower and "fungsional" in question_lower:
-        keywords.extend(["Asisten Ahli", "Lektor", "jabatan", "fungsional", "minimal"])
-        logger.debug("Query expansion: jabatan fungsional")
-    
-    # 17. Masa Bimbingan
-    if "masa" in question_lower and "bimbingan" in question_lower:
-        keywords.extend(["1 semester", "maksimal", "masa", "bimbingan", "waktu"])
-        logger.debug("Query expansion: masa bimbingan")
-    
-    # 18. Frekuensi Bimbingan
-    if any(word in question_lower for word in ["berapa kali", "minimal"]) and "bimbingan" in question_lower:
-        keywords.extend(["8 kali", "minimal", "bimbingan", "bertemu", "konsultasi"])
-        logger.debug("Query expansion: frekuensi bimbingan")
-    
-    # 19. Lama Kegiatan Penelitian
-    if "lama" in question_lower and any(word in question_lower for word in ["penelitian", "kegiatan"]):
-        keywords.extend(["7 hari", "minimal", "kerja", "penelitian", "instansi"])
-        logger.debug("Query expansion: lama penelitian")
-    
-    # 20. Komponen Penilaian
-    if "komponen" in question_lower and "penilaian" in question_lower:
-        keywords.extend(["orisinalitas", "sistematika", "penguasaan", "argumentasi", "penampilan", "etika"])
-        logger.debug("Query expansion: komponen penilaian")
-    
-    # Gabungkan query asli dengan keywords
-    if keywords:
-        # Deduplicate keywords
-        unique_keywords = list(dict.fromkeys(keywords))
-        expanded = f"{question} {' '.join(unique_keywords)}"
-        logger.info(f"Query expanded: '{question}' → added {len(unique_keywords)} keywords")
-    
+    """
+    Tambahkan bentuk panjang/pendek dari akronim akademik yang muncul di query.
+    Tidak menambahkan kata kunci jawaban apa pun.
+    """
+    if not question:
+        return question
+
+    additions: list[str] = []
+    text_lower = question.lower()
+
+    # 1. Akronim uppercase → bentuk panjang
+    for acronym, expansions in UPPERCASE_ACRONYMS.items():
+        if not _has_uppercase_token(question, acronym):
+            continue
+        for exp in expansions:
+            if exp.lower() not in text_lower and exp not in additions:
+                additions.append(exp)
+
+    # 2. Bentuk panjang → akronim
+    for phrase, expansions in LONG_FORM_TO_ACRONYM.items():
+        if not _has_phrase(text_lower, phrase):
+            continue
+        for exp in expansions:
+            if not _has_uppercase_token(question, exp) and exp not in additions:
+                additions.append(exp)
+
+    if not additions:
+        return question
+
+    expanded = f"{question} {' '.join(additions)}"
+    logger.debug(
+        f"Query expansion (acronym only): added {len(additions)} term(s): {additions}"
+    )
     return expanded
 
 
 def expand_query_smart(question: str, enable_expansion: bool = True) -> str:
-    
+    """Backward-compatible wrapper. Aman dipanggil dari HybridSearcher."""
     if not enable_expansion:
         return question
-    
     return expand_query(question)
