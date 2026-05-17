@@ -155,29 +155,39 @@ def verify_telegram_webhook(request_body: bytes, signature: str) -> bool:
 
 
 def sanitize_input(text: str, max_length: int = 1000) -> str:
-    """Sanitize user input.
+    """Sanitize user input untuk pertanyaan natural Indonesia.
 
-    PERINGATAN: whitelist di sini cukup ketat dan akan menghapus karakter
-    Unicode (mis. è, ñ, é) serta sebagian tanda baca yang umum dipakai
-    dalam pertanyaan natural Indonesia. Saat ini fungsi ini TIDAK dipanggil
-    di chat path (lihat search dengan `validate_chat_input`). Jangan
-    pakai fungsi ini untuk membersihkan pertanyaan user tanpa terlebih
-    dulu melonggarkan whitelist regex di bawah.
+    Strategi: bukan whitelist karakter ketat, tapi:
+    1. Buang control characters (kategori Unicode "Cc") kecuali whitespace
+       yang umum (\\t, \\n, \\r).
+    2. Normalisasi whitespace berlebih.
+    3. Batasi panjang.
+
+    Aman untuk karakter Indonesia/Unicode umum (è, ñ, é, em-dash, smart
+    quotes), karena hanya control chars yang dibuang.
     """
     if not text:
         return ""
-    
-    # Limit length
+
     text = text[:max_length]
-    
-    # Remove potentially dangerous characters
-    # Keep alphanumeric, spaces, and common punctuation
-    import re
-    text = re.sub(r'[^\w\s\.\?\!\,\;\:\-\(\)\[\]\"\'\/]', '', text)
-    
-    # Remove excessive whitespace
-    text = ' '.join(text.split())
-    
+
+    import unicodedata
+
+    cleaned_chars = []
+    for ch in text:
+        if ch in ("\t", "\n", "\r"):
+            cleaned_chars.append(ch)
+            continue
+        if unicodedata.category(ch) == "Cc":
+            # Buang control character lain (mis. NULL, BEL, escape codes).
+            continue
+        cleaned_chars.append(ch)
+
+    text = "".join(cleaned_chars)
+
+    # Normalisasi whitespace berlebih.
+    text = " ".join(text.split())
+
     return text.strip()
 
 

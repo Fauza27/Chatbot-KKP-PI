@@ -182,12 +182,9 @@ def _handle_retrieval(
     reason: str,
 ) -> Dict[str, Any]:
     """Handle retrieval-based questions."""
-    from src.retrieval.self_query import extract_query_components
-    from src.retrieval.hybrid_search import HybridSearcher
-    from src.retrieval.parent_child import ParentChildFetcher
-    from src.retrieval.reranker import CrossEncoderReranker
+    from src.retrieval.pipeline import run_retrieval
 
-    # Step 1: Query reformulation
+    # Step 1: Query reformulation (resolve referensi implisit "itu", "tadi", dst.)
     try:
         search_query = reformulate_query(question, memory)
         if search_query != question:
@@ -196,17 +193,10 @@ def _handle_retrieval(
         logger.warning(f"[session={session_id}] Reformulation failed, using original: {e}")
         search_query = question
 
-    # Step 2: Self-query extraction
-    parsed = extract_query_components(search_query)
+    # Step 2-5: Self-query → hybrid search → parent fetch → rerank
+    retrieval = run_retrieval(query=search_query, rerank_query=question)
 
-    # Step 3: Hybrid search
-    searcher = HybridSearcher()
-    search_results = searcher.search(
-        query=parsed.semantic_query,
-        filters=parsed.filters,
-    )
-
-    if not search_results:
+    if retrieval.is_empty:
         answer = (
             "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI yang tersedia. "
             "Silakan konsultasikan langsung dengan Dosen Pembimbing atau Program Studi Anda."
@@ -221,17 +211,7 @@ def _handle_retrieval(
             "sources": [],
         }
 
-    # Step 4: Parent-child fetching
-    fetcher = ParentChildFetcher()
-    parent_results = fetcher.fetch_parents(search_results)
-
-    # Step 5: Reranking
-    try:
-        reranker = CrossEncoderReranker()
-        reranked_parents = reranker.rerank(query=question, documents=parent_results)
-    except Exception as e:
-        logger.warning(f"[session={session_id}] Reranking failed, using unranked: {e}")
-        reranked_parents = parent_results[: settings.rerank_top_n]
+    reranked_parents = retrieval.parent_documents
 
     # Step 6: Generation
     result = _rag_chain.invoke_with_history(
