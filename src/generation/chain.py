@@ -11,6 +11,7 @@ from loguru import logger
 from operator import itemgetter
 
 from config.settings import get_settings
+from src.retrieval.source_utils import detect_panduan_type
 
 settings = get_settings()
 
@@ -125,13 +126,11 @@ def _format_context(documents: list[Document] | list[dict] | str) -> str:
         # Sesuaikan dengan struktur data parent_chunk_kkp.json dan parent_chunk_pi.json
         section = meta.get("section", "")
         title = meta.get("title", "")
-        parent_id = meta.get("parent_id", "")
-        source = meta.get("source", "")
-        child_ids = meta.get("child_ids", [])
         matched_children = meta.get("matched_children", [])
 
         # Build header
-        header = f"[Sumber: Buku Panduan {'PI' if 'pi' in parent_id.lower() else 'KKP'}]"
+        panduan_type = detect_panduan_type(meta)
+        header = f"[Sumber: Buku Panduan {panduan_type}]"
         if section:
             header += f" — {section}"
         if title and title != section:
@@ -432,25 +431,13 @@ class RAGChain:
         Fallback to full retrieval when clarification context is not relevant
         """
         logger.info("🔄 Fallback: Switching from clarification to retrieval mode")
-        
+
         try:
-            # Import here to avoid circular imports
-            from src.retrieval.self_query import extract_query_components
-            from src.retrieval.hybrid_search import HybridSearcher
-            from src.retrieval.parent_child import ParentChildFetcher
-            from src.retrieval.reranker import CrossEncoderReranker
-            
-            # Extract query components
-            parsed = extract_query_components(question)
-            
-            # Perform hybrid search
-            searcher = HybridSearcher()
-            search_results = searcher.search(
-                query=parsed.semantic_query,
-                filters=parsed.filters,
-            )
-            
-            if not search_results:
+            from src.retrieval.pipeline import run_retrieval
+
+            retrieval = run_retrieval(query=question)
+
+            if retrieval.is_empty:
                 return {
                     "answer": (
                         "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI yang tersedia. "
@@ -458,25 +445,14 @@ class RAGChain:
                     ),
                     "sources": []
                 }
-            
-            # Fetch parent documents
-            fetcher = ParentChildFetcher()
-            parent_results = fetcher.fetch_parents(search_results)
-            
-            # Rerank documents
-            reranker = CrossEncoderReranker()
-            reranked_parents = reranker.rerank(
-                query=question,
-                documents=parent_results,
-            )
-            
+
             # Generate answer with new context
             return self.invoke_with_history(
                 question=question,
-                context_documents=reranked_parents,
+                context_documents=retrieval.parent_documents,
                 conversation_history=conversation_history,
             )
-            
+
         except Exception as e:
             logger.error(f"Fallback retrieval failed: {e}")
             return {
