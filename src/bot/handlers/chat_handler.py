@@ -11,6 +11,7 @@ from supabase import create_client, Client
 
 from config.settings import get_settings
 from src.bot import messages
+from src.retrieval.source_utils import detect_panduan_type
 from src.services.ai_services import chat
 
 logger = logging.getLogger(__name__)
@@ -80,14 +81,13 @@ def _format_source_line(source: dict) -> str:
     """Build one source line with HTML-escaped values to avoid Telegram parse errors."""
     section = source.get("section", "") or ""
     title = source.get("title", "") or ""
-    parent_id = source.get("parent_id", "") or ""
 
     if section and title and section != title:
         source_name = f"{section} — {title}"
     else:
         source_name = title or section or "Buku Panduan"
 
-    panduan_type = "PI" if "pi" in parent_id.lower() else "KKP"
+    panduan_type = detect_panduan_type(source)
 
     safe_name = html.escape(source_name)
     safe_panduan = html.escape(panduan_type)
@@ -157,11 +157,23 @@ async def handle_text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if num_docs > 0:
             logger.info(f"Chat response sent to user {user_id}, used {num_docs} documents")
 
-        # Catat ke database untuk monitoring (jangan blok event loop)
+        # Catat ke database untuk monitoring (jangan blok event loop).
+        # Track task agar exception dari logging tidak hilang diam-diam.
         username = update.effective_user.username or update.effective_user.first_name or "Unknown"
-        asyncio.create_task(
+        log_task = asyncio.create_task(
             asyncio.to_thread(log_chat_to_db, user_id, username, text, reply_text)
         )
+
+        def _on_log_done(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.error(
+                    f"Background chat log task failed for user {user_id}: {exc}"
+                )
+
+        log_task.add_done_callback(_on_log_done)
 
     except Exception:
         logger.exception(f"Unexpected error in text chat handler for user {user_id}")
