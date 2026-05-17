@@ -275,3 +275,31 @@ CREATE TABLE IF NOT EXISTS chat_logs (
   answer TEXT
 );
 
+-- 9. RLS untuk user_quotas dan chat_logs
+-- ──────────────────────────────────────────────────
+-- Konsisten dengan kebijakan parent/child_documents: hanya service_role.
+ALTER TABLE user_quotas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Service role can read user_quotas" ON user_quotas;
+DROP POLICY IF EXISTS "Service role can write user_quotas" ON user_quotas;
+DROP POLICY IF EXISTS "Service role can read chat_logs" ON chat_logs;
+DROP POLICY IF EXISTS "Service role can write chat_logs" ON chat_logs;
+
+CREATE POLICY "Service role can read user_quotas"
+    ON user_quotas FOR SELECT
+    USING (auth.role() = 'service_role');
+
+CREATE POLICY "Service role can write user_quotas"
+    ON user_quotas FOR ALL
+    USING (auth.role() = 'service_role')
+    WITH CHECK (auth.role() = 'service_role');
+
+CREATE POLICY "Service role can read chat_logs"
+    ON chat_logs FOR SELECT
+    USING (auth.role() = 'service_role');
+
+CREATE POLICY "Service role can write chat_logs"
+    ON chat_logs FOR INSERT
+    WITH CHECK (auth.role() = 'service_role');
+
