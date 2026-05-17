@@ -92,62 +92,40 @@ def setup_logger(debug: bool = False) -> None:
         )
 
 def run_rag_pipeline(question: str, debug: bool = False) -> dict:
-    from src.retrieval.self_query import extract_query_components
-    from src.retrieval.hybrid_search import HybridSearcher
-    from src.retrieval.parent_child import ParentChildFetcher
-    from src.retrieval.reranker import CrossEncoderReranker
-    from src.generation.chain import generate_answer
+    from src.retrieval.pipeline import run_retrieval
+    from src.generation.chain import _format_context, generate_answer
 
     metadata: dict = {}
 
     logger.info("=" * 60)
-    logger.info("TAHAP 1: Self-Query Extraction")
+    logger.info("TAHAP 1-4: Self-Query → Hybrid Search → Parent Fetch → Rerank")
     logger.info("=" * 60)
 
-    parsed = extract_query_components(question)
+    retrieval = run_retrieval(query=question)
+    reranked_parents = retrieval.parent_documents
 
-    metadata["self_query"] = {
-        "original_query": parsed.original_query,
-        "semantic_query": parsed.semantic_query,
-        "filters": parsed.filters,
-    }
-
-    if debug:
-        logger.debug(f"  Query asli    : {parsed.original_query}")
-        logger.debug(f"  Query semantik: {parsed.semantic_query}")
-        logger.debug(f"  Filters       : {parsed.filters}")
-
-    logger.info("=" * 60)
-    logger.info("TAHAP 2: Hybrid Search (BM25 + Dense + RRF)")
-    logger.info("=" * 60)
-
-    searcher = HybridSearcher()
-    search_results = searcher.search(
-        query=parsed.semantic_query,
-        filters=parsed.filters,
-    )
-
-    metadata["hybrid_search"] = {
-        "num_results": len(search_results),
-        "top_scores": [
+    metadata["retrieval"] = {
+        "num_parents": retrieval.num_docs,
+        "parents": [
             {
-                "child_id": r.child_id,
-                "hybrid_score": round(r.hybrid_score, 4),
+                "parent_id": p.get("parent_id", ""),
+                "title": p.get("title", ""),
+                "ce_score": round(p.get("cross_encoder_score", 0), 4),
+                "matched_children": p.get("matched_children", []),
             }
-            for r in search_results[:5]
+            for p in reranked_parents
         ],
     }
 
     if debug:
-        for i, r in enumerate(search_results[:5], 1):
-            title = r.document.metadata.get("title", "")[:50]
+        for i, p in enumerate(reranked_parents, 1):
             logger.debug(
-                f"  [{i}] {r.child_id} | "
-                f"hybrid={r.hybrid_score:.4f} | "
-                f"{title}"
+                f"  [{i}] {p.get('parent_id')} | "
+                f"CE={p.get('cross_encoder_score', 0):.4f} | "
+                f"{p.get('title', '')[:50]}"
             )
 
-    if not search_results:
+    if retrieval.is_empty:
         return {
             "answer": (
                 "Maaf, saya tidak menemukan informasi yang relevan "
@@ -159,66 +137,9 @@ def run_rag_pipeline(question: str, debug: bool = False) -> dict:
         }
 
     logger.info("=" * 60)
-    logger.info("TAHAP 3: Parent-Child Fetching")
-    logger.info("=" * 60)
-
-    fetcher = ParentChildFetcher()
-    parent_results = fetcher.fetch_parents(search_results)
-
-    metadata["parent_child"] = {
-        "num_parents": len(parent_results),
-        "parents": [
-            {
-                "parent_id": p["parent_id"],
-                "title": p["title"],
-                "matched_children": p.get("matched_children", []),
-            }
-            for p in parent_results
-        ],
-    }
-
-    if debug:
-        for p in parent_results:
-            logger.debug(
-                f"  Parent: {p['parent_id']} | {p['title']} | "
-                f"children={p.get('matched_children', [])}"
-            )
-
-    logger.info("=" * 60)
-    logger.info("TAHAP 4: Cross-Encoder Reranking")
-    logger.info("=" * 60)
-
-    reranker = CrossEncoderReranker()
-    reranked_parents = reranker.rerank(
-        query=question,
-        documents=parent_results,
-    )
-
-    metadata["reranking"] = {
-        "num_reranked": len(reranked_parents),
-        "reranked": [
-            {
-                "parent_id": p["parent_id"],
-                "title": p["title"],
-                "ce_score": round(p.get("cross_encoder_score", 0), 4),
-            }
-            for p in reranked_parents
-        ],
-    }
-
-    if debug:
-        for i, p in enumerate(reranked_parents, 1):
-            logger.debug(
-                f"  [{i}] {p['parent_id']} | "
-                f"CE={p.get('cross_encoder_score', 0):.4f} | "
-                f"{p['title'][:50]}"
-            )
-
-    logger.info("=" * 60)
     logger.info("TAHAP 5: Prompt Engineering + LLM Generation")
     logger.info("=" * 60)
 
-    from src.generation.chain import _format_context
     context_str = _format_context(reranked_parents)
     contexts_list = [p["content"] for p in reranked_parents]
 
@@ -383,33 +304,18 @@ def run_interactive(debug: bool = False) -> None:
                     answer = result["answer"]
 
                 else:  # NEEDS_RETRIEVAL
-                    from src.retrieval.self_query import extract_query_components
-                    from src.retrieval.hybrid_search import HybridSearcher
-                    from src.retrieval.parent_child import ParentChildFetcher
-                    from src.retrieval.reranker import CrossEncoderReranker
+                    from src.retrieval.pipeline import run_retrieval
 
                     search_query = reformulate_query(question, memory)
-                    parsed = extract_query_components(search_query)
+                    retrieval = run_retrieval(query=search_query, rerank_query=question)
 
-                    searcher = HybridSearcher()
-                    search_results = searcher.search(
-                        query=parsed.semantic_query,
-                        filters=parsed.filters,
-                    )
-
-                    if not search_results:
+                    if retrieval.is_empty:
                         answer = (
                             "Maaf, informasi tersebut tidak ditemukan dalam panduan KKP/PI. "
                             "Silakan konsultasikan dengan Dosen Pembimbing."
                         )
                     else:
-                        fetcher = ParentChildFetcher()
-                        parent_results = fetcher.fetch_parents(search_results)
-
-                        reranker = CrossEncoderReranker()
-                        reranked_parents = reranker.rerank(
-                            query=question, documents=parent_results
-                        )
+                        reranked_parents = retrieval.parent_documents
 
                         result = rag_chain.invoke_with_history(
                             question=question,

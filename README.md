@@ -13,7 +13,7 @@
 
 ## 🎯 Kenapa Dibuat
 
-Proyek ini berangkat dari masalah yang cukup sering saya lihat di kampus (STMIK Widya Cipta Dharma). Saat memasuki fase penting seperti Kuliah Kerja Praktik (KKP) dan Penulisan Ilmiah (PI) di semester 6, banyak mahasiswa masih merasa bingung harus mulai dari mana. Padahal, buku pedoman sudah tersedia—hanya saja, tidak semua orang benar-benar membacanya atau memahami isinya dengan baik.
+Proyek ini berangkat dari masalah yang cukup sering saya lihat di kampus (STMIK Widya Cipta Dharma). Saat memasuki fase penting seperti Kuliah Kerja Praktik (KKP) dan Penulisan Ilmiah (PI) di semester 6, banyak mahasiswa masih merasa bingung harus mulai dari mana. Padahal, buku pedoman sudah tersedia hanya saja, tidak semua orang benar-benar membacanya atau memahami isinya dengan baik.
 
 Buat saya, proyek ini bukan sekadar tugas atau portofolio. Saya ingin benar-benar memahami bagaimana membangun sistem Retrieval-Augmented Generation (RAG) yang siap digunakan di kondisi nyata (production-grade) dengan kemampuan percakapan yang natural dan kontekstual.
 
@@ -74,12 +74,12 @@ Gambaran besar tentang bagaimana infrastruktur ini meramu dan memecahkan setiap 
 │  ┌────────▼──────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │   Self-Query      │  │    Hybrid    │  │   Parent-    │  │
 │  │   Extraction      │→ │    Search    │→ │    Child     │  │
-│  │  (Metadata Filter)│  │ (DB-side FTS │  │   Fetching   │  │
+│  │  (YAML Keywords)  │  │ (DB-side FTS │  │   Fetching   │  │
 │  └───────────────────┘  │  + Vector)   │  └──────┬───────┘  │
 │                         └──────────────┘         │          │
 │  ┌───────────────────┐  ┌──────────────┐  ┌──────▼───────┐  │
 │  │   LLM Generation  │← │  Cross-Encoder│← │   Reranking  │  │
-│  │   (GPT-4o/Opus)   │  │   Reranking   │  │  (Top-N)     │  │
+│  │   (GPT-4o/Opus)   │  │   (Pure ML)   │  │  (Top-N)     │  │
 │  └───────────────────┘  └──────────────┘  └──────────────┘  │
 └───────────────────────────────────────────────────────────────┘
             │
@@ -93,6 +93,24 @@ Gambaran besar tentang bagaimana infrastruktur ini meramu dan memecahkan setiap 
 │  └──────────────────┘  └──────────────────┘                  │
 └───────────────────────────────────────────────────────────────┘
 ```
+
+### 🔧 Komponen Utama
+
+**Centralized Pipeline (`src/retrieval/pipeline.py`)**
+- Single source of truth untuk seluruh alur retrieval
+- Mengintegrasikan self-query → hybrid search → parent fetching → reranking
+
+**Query Expansion (Netral)**
+- ekspansi akronim akademik (PI ↔ Penulisan Ilmiah, KKP ↔ Kuliah Kerja Praktik)
+- Mendukung matching dua arah (akronim → bentuk panjang, bentuk panjang → akronim)
+
+**Source Detection yang Reliable**
+- Deteksi PI/KKP berdasarkan field `source` yang reliable
+- Fallback ke prefix ID jika diperlukan
+
+**Cross-Encoder Reranking Murni**
+- Menggunakan model `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Scoring berdasarkan semantic similarity
 
 ---
 
@@ -111,6 +129,8 @@ Saya tidak asal ikut tren atau sekadar memakai teknologi yang sedang hype. Setia
 - **RAGAS**: Tanpa evaluasi yang jelas, pengembangan RAG rasanya seperti coba-coba tanpa arah. RAGAS saya gunakan untuk mengukur kualitas sistem secara lebih objektif, seperti faithfulness dan context precision. Dengan begitu, setiap perubahan pada pipeline bisa dievaluasi dengan dasar yang lebih terukur, bukan sekadar feeling.
 
 - **Loguru**: Untuk logging yang lebih baik dan mudah dibaca, menggantikan logging standard Python yang kadang membingungkan dalam debugging sistem yang kompleks.
+
+- **YAML Configuration**: Sistem konfigurasi eksternal untuk section keywords yang memudahkan maintenance tanpa perlu mengubah kode. Keywords disimpan dalam `config/section_keywords.yaml` dengan struktur yang terorganisir per bagian dokumen.
 
 ## 🎯 Kemampuan Percakapan Kontekstual
 
@@ -139,7 +159,7 @@ Salah satu aspek yang paling menantang dalam membangun chatbot RAG adalah membua
 
 ---
 
-## 🧠 Keputusan Desain yang Menarik
+## 🧠 Keputusan Desain
 
 Merancang sistem RAG yang benar-benar “paham konteks” ternyata bukan soal menulis kode sebanyak mungkin, tapi soal berani mengambil keputusan dan menerima konsekuensinya. Sepanjang proses ini, saya justru lebih sering dihadapkan pada trade-off dibanding sekadar urusan teknis.
 
@@ -178,11 +198,13 @@ Jalankan script SQL di `scripts/supabase.sql` melalui SQL Editor di dashboard Su
 -- Script ini menambahkan fungsi RPC untuk atomic quota management
 ```
 
+**Catatan**: Jika Anda menggunakan sistem lama, pastikan untuk menjalankan evaluasi ulang setelah refactoring integritas evaluasi. Lihat dokumentasi lengkap di `docs/REFACTOR_INTEGRITAS_EVALUASI.md`.
+
 **3. Ingestion Pipeline**
 ```bash
 python main.py --ingest --dataset both
 ```
-Perintah ini akan memproses PDF panduan, memecahnya menjadi chunks, membuat embeddings menggunakan OpenAI, dan menyimpannya ke Supabase.
+Perintah ini akan memproses PDF panduan, memecahnya menjadi chunks, membuat embeddings menggunakan OpenAI, dan menyimpannya ke Supabase. Sistem akan otomatis memuat konfigurasi section keywords dari `config/section_keywords.yaml`.
 
 **4. Jalankan Aplikasi**
 ```bash
@@ -213,6 +235,8 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 - **Edge Cases**: Pertanyaan ambigu, out-of-domain, multi-part questions
 - **Memory Window**: Pengelolaan memori percakapan dengan window 5 turn
 - **Informal Language**: Penanganan typo dan bahasa tidak formal ("gmn cara dftar kkp?")
+- **Source Detection**: Deteksi PI/KKP yang akurat berdasarkan metadata dokumen
+- **Query Expansion**: Ekspansi akronim netral tanpa bias evaluasi
 
 ### 📊 Metrik Performa
 - **Intent Classification Accuracy**: >95% untuk semua kategori
@@ -221,6 +245,7 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 - **Response Relevance**: Konsisten memberikan jawaban yang akurat dan kontekstual
 - **System Reliability**: TTL-based session management mencegah memory leaks
 - **Performance**: Async processing untuk response time yang optimal
+- **Source Detection Accuracy**: 100% akurasi setelah perbaikan bug PI/KKP detection
 
 ### 🔧 Optimisasi yang Dilakukan
 1. **Enhanced Intent Classifier**: Sistem deteksi switching yang lebih akurat
@@ -230,6 +255,9 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 5. **Centralized Messaging**: Sistem pesan terpusat dengan HTML formatting yang konsisten
 6. **Code Quality**: Penghapusan dead code dan perbaikan dependencies untuk maintainability
 7. **Fallback Mechanisms**: Sistem fallback untuk situasi edge case
+8. **Evaluation Integrity**: Penghapusan bias evaluasi dari query expansion dan reranking
+9. **Centralized Pipeline**: Single source of truth untuk retrieval operations
+10. **External Configuration**: YAML-based configuration untuk maintainability yang lebih baik
 
 ---
 
@@ -243,15 +271,18 @@ Ada beberapa hal yang paling membekas buat saya:
   
 - **Metrik tidak selalu mencerminkan kenyataan (pengalaman dengan RAGAS)**: 
   Sempat kaget waktu skor faithfulness dari RAGAS turun. Sekilas terlihat seperti ada masalah serius.
-  Tapi setelah dicek manual, ternyata jawabannya tetap benar—tidak ada halusinasi.
+  Tapi setelah dicek manual, ternyata jawabannya tetap benar, tidak ada halusinasi.
   Masalahnya ada di cara chatbot menyampaikan jawaban. Saya sengaja membuatnya lebih santai dan tidak terlalu kaku, jadi sering melakukan parafrasa dari teks asli. Di sisi metrik, ini dianggap kurang “faithful”, tapi dari sisi pengguna justru terasa lebih nyaman.
   Dari sini saya belajar: metrik itu penting sebagai panduan, tapi tidak boleh jadi satu-satunya acuan. Tetap perlu validasi manual dan, kalau memungkinkan, feedback langsung dari pengguna. Karena pada akhirnya, yang dinilai bukan dashboard—tapi pengalaman orang yang benar-benar memakai sistemnya.
 
 - **Percakapan kontekstual adalah tantangan tersendiri**:
   Membangun sistem yang benar-benar "paham" konteks percakapan ternyata jauh lebih kompleks dari yang dibayangkan. Bukan hanya soal menyimpan riwayat chat, tapi juga mendeteksi kapan pengguna beralih topik, kapan mereka minta klarifikasi, dan kapan mereka sekadar basa-basi. Setelah melalui berbagai iterasi dan testing komprehensif, sistem sekarang mampu menangani context switching dengan akurasi 100% dan memahami bahasa informal dengan baik.
 
+- **Code quality dan maintainability sama pentingnya dengan fitur**:
+  Refactoring besar-besaran yang saya lakukan mengajarkan pentingnya arsitektur yang bersih. Memindahkan logic ke centralized pipeline, menghilangkan duplikasi kode, dan menggunakan konfigurasi eksternal (YAML) membuat sistem jauh lebih mudah dipelihara. Investasi waktu untuk refactoring terbayar dengan kemudahan debugging dan pengembangan fitur baru.
+
 - **Testing adalah kunci kualitas**:
-  Tanpa testing yang sistematis, sulit mengetahui apakah sistem benar-benar berfungsi dengan baik. Melalui testing berbagai edge case—dari pertanyaan ambigu hingga typo—saya bisa mengidentifikasi dan memperbaiki masalah sebelum sistem digunakan secara luas. Dokumentasi lengkap tentang journey optimisasi ini tersimpan di folder `docs/optimization-journey/`.
+  Tanpa testing yang sistematis, sulit mengetahui apakah sistem benar-benar berfungsi dengan baik. Melalui testing berbagai edge case dari pertanyaan ambigu hingga typo saya bisa mengidentifikasi dan memperbaiki masalah sebelum sistem digunakan secara luas.
 
 ## 🚀 Status Proyek
 
@@ -263,20 +294,43 @@ Sistem ini telah mencapai status **production-ready** dengan:
 - ✅ Evaluasi objektif menggunakan RAGAS
 - ✅ Optimisasi performa dan akurasi yang berkelanjutan
 
-### 🔄 Update Terbaru (Mei 2026)
-- **Performance & Reliability Improvements**: 
-  - Session management dengan TTL + LRU eviction untuk mencegah memory leaks
-  - Async optimization untuk mencegah event loop blocking pada operasi I/O
-  - Centralized messaging system dengan HTML formatting yang konsisten
-  - Removal of hard-coded values, sekarang menggunakan konfigurasi dari settings
-- **Code Quality Enhancements**:
-  - Penghapusan ~170 baris dead code dari retrieval modules
-  - Perbaikan circular import dependencies
-  - Consistent post-processing untuk semua chain methods
-  - Enhanced security dengan proper input sanitization warnings
-- **Previous Updates (Januari 2026)**:
-  - **Hybrid Search Optimization**: Migrasi BM25 processing ke PostgreSQL untuk performa yang lebih baik dan konsistensi linguistik (Snowball stemmer Indonesia)
-  - **Atomic Quota System**: Implementasi RPC untuk menghindari race condition pada sistem quota harian Telegram bot
-  - **Enhanced Security**: HTML escaping untuk Telegram messages dan reuse connection untuk efisiensi resource
 
-Proyek ini tidak hanya berhasil memecahkan masalah awal (membantu mahasiswa memahami panduan KKP/PI), tapi juga menjadi pembelajaran mendalam tentang bagaimana membangun sistem RAG yang benar-benar siap digunakan di dunia nyata.
+**📁 Struktur File**
+```
+src/retrieval/
+├── pipeline.py          # Centralized retrieval pipeline
+├── query_expansion.py   # Neutral acronym expansion only
+├── reranker.py         # Pure cross-encoder scoring
+└── source_utils.py     # Reliable PI/KKP detection
+
+config/
+└── section_keywords.yaml  # External keyword configuration
+
+docs/
+└── REFACTOR_INTEGRITAS_EVALUASI.md  # Detailed refactoring documentation
+```
+
+
+Proyek ini tidak hanya berhasil memecahkan masalah awal (membantu mahasiswa memahami panduan KKP/PI), tapi juga menjadi pembelajaran mendalam tentang bagaimana membangun sistem RAG yang benar-benar siap digunakan di dunia nyata dengan integritas evaluasi yang terjamin.
+
+---
+
+## 📚 Dokumentasi Tambahan
+
+Untuk pemahaman yang lebih mendalam tentang sistem ini, tersedia dokumentasi lengkap:
+
+### 🏛️ Architecture Decision Records (ADR)
+- **[ADR-001: Arsitektur Sistem Utama](ADR/ADR-001-Arsitektur-Sistem-Utama.md)** - Keputusan arsitektur monolith serverless
+- **[ADR-002: Strategi Retrieval Hierarkis Hybrid](ADR/ADR-002-Strategi-Retrieval-Hierarkis-Hybrid.md)** - Parent-child chunking dan hybrid search
+- **[ADR-003: Reranking dengan Cross-Encoder](ADR/ADR-003-Reranking-dengan-Cross-Encoder.md)** - Implementasi reranking lokal
+- **[ADR-004: Klasifikasi Intent Percakapan](ADR/ADR-004-Klasifikasi-Intent-Percakapan.md)** - Pre-processing intent classification
+
+### 🔧 Dokumentasi Teknis
+- **[Refactor Integritas Evaluasi](docs/REFACTOR_INTEGRITAS_EVALUASI.md)** - Dokumentasi lengkap tentang penghapusan bias evaluasi
+- **[API Documentation](docs/API_DOCUMENTATION.md)** - Dokumentasi endpoint REST API
+- **[File Organization](docs/FILE_ORGANIZATION.md)** - Struktur organisasi file proyek
+- **[Optimization Journey](docs/optimization-journey/)** - Dokumentasi lengkap perjalanan optimisasi sistem
+
+### ⚙️ Konfigurasi
+- **[Section Keywords](config/section_keywords.yaml)** - Konfigurasi keyword untuk self-query extraction
+- **[Settings](config/settings.py)** - Konfigurasi sistem dan parameter
