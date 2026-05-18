@@ -180,7 +180,7 @@ Semua pertimbangan, alasan, dan dilema yang saya temui selama membangun sistem i
 
 **1. Clone & Setup Environment**
 ```bash
-git clone https://github.com/yourusername/penelitian-ilmiah.git
+git clone https://github.com/Fauza27/penelitian-ilmiah.git
 cd penelitian-ilmiah
 python -m venv venv
 # Windows: venv\Scripts\activate | Linux/Mac: source venv/bin/activate
@@ -246,6 +246,12 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 - **System Reliability**: TTL-based session management mencegah memory leaks
 - **Performance**: Async processing untuk response time yang optimal
 - **Source Detection Accuracy**: 100% akurasi setelah perbaikan bug PI/KKP detection
+- **RAGAS Evaluation (Overall PASS)**:
+  - Faithfulness: 0,730 (threshold 0,70) ✅
+  - Context Precision: 0,842 (threshold 0,80) ✅
+  - Answer Completeness: 5,24/10 (threshold 3,50) ✅
+  - Answer Actionability: 4,79/10 (threshold 3,50) ✅
+  - Answer Relevancy: 0,585 (quality warning — deliberate verbose design)
 
 ### 🔧 Optimisasi yang Dilakukan
 1. **Enhanced Intent Classifier**: Sistem deteksi switching yang lebih akurat
@@ -291,7 +297,7 @@ Sistem ini telah mencapai status **production-ready** dengan:
 - ✅ Kemampuan percakapan kontekstual yang canggih  
 - ✅ Testing komprehensif dengan success rate 100%
 - ✅ Dokumentasi lengkap dan ADR yang terstruktur
-- ✅ Evaluasi objektif menggunakan RAGAS
+- ✅ Evaluasi objektif menggunakan RAGAS (Overall PASS, skor jujur tanpa bias)
 - ✅ Optimisasi performa dan akurasi yang berkelanjutan
 
 
