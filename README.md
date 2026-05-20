@@ -147,10 +147,12 @@ Salah satu aspek yang paling menantang dalam membangun chatbot RAG adalah membua
 - **Clarification**: Permintaan elaborasi dari jawaban sebelumnya
 
 ### 💭 Memory Management & Session Handling
-- **Session-based Memory**: Setiap pengguna memiliki memori percakapan terpisah dengan TTL + LRU eviction
-- **Window Memory**: Menyimpan 5 turn terakhir untuk efisiensi dengan automatic cleanup
+- **Database-Backed Sessions**: Session disimpan secara persisten di Supabase dengan hot LRU cache untuk performa optimal
+- **Session Persistence**: Percakapan survive server restart dan mendukung deployment multi-server
+- **Window Memory**: Menyimpan 5 turn terakhir untuk efisiensi dengan automatic TTL cleanup
 - **Context Preservation**: Mempertahankan konteks dokumen yang relevan untuk klarifikasi
 - **Async Processing**: Non-blocking I/O operations untuk performa optimal
+- **Fallback Mechanism**: Automatic fallback ke in-memory sessions jika database tidak tersedia
 
 ### 🔧 Query Processing
 - **Query Reformulation**: Mengubah pertanyaan dengan referensi implisit menjadi query mandiri
@@ -189,12 +191,24 @@ cp .env.example .env
 ```
 Buka file `.env` dan isi dengan kredensial yang diperlukan: OpenAI API Key, Supabase URL, Supabase Key, dan Telegram Token (opsional).
 
+**Konfigurasi Session Storage (Baru)**:
+```bash
+# Session Management
+USE_DATABASE_SESSIONS=true                    # Enable database-backed sessions
+TABLE_CONVERSATION_SESSIONS=conversation_sessions
+MAX_ACTIVE_SESSIONS=1000                     # Cache size untuk database mode  
+SESSION_CLEANUP_INTERVAL=3600                # TTL cleanup (seconds)
+```
+
 **2. Setup Database**
 Jalankan script SQL di `scripts/supabase.sql` melalui SQL Editor di dashboard Supabase Anda. Script ini akan membuat tabel dan index yang diperlukan untuk vector search.
 
-**Penting**: Setelah menjalankan script utama, jalankan juga migration untuk quota system:
+**Penting**: Setelah menjalankan script utama, jalankan juga migration untuk session storage dan quota system:
 ```sql
--- Copy-paste isi file scripts/supabase_migration_quota_rpc.sql ke SQL Editor
+-- 1. Copy-paste isi file scripts/supabase_session_migration.sql ke SQL Editor
+-- Script ini menambahkan tabel conversation_sessions untuk persistent session storage
+
+-- 2. Copy-paste isi file scripts/supabase_migration_quota_rpc.sql ke SQL Editor  
 -- Script ini menambahkan fungsi RPC untuk atomic quota management
 ```
 
@@ -215,7 +229,16 @@ python main.py
 python main.py --cli
 ```
 
-**5. Evaluasi Sistem (Opsional)**
+**5. Testing Session Migration (Opsional)**
+```bash
+# Test database session storage
+python scripts/test_session_migration.py
+
+# Test integration dengan chat system
+python scripts/test_chat_integration.py
+```
+
+**6. Evaluasi Sistem (Opsional)**
 ```bash
 # Evaluasi dengan RAGAS (tanpa ground truth)
 python main.py --evaluate-no-gt --dataset both
@@ -233,10 +256,12 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 - **Context Switching**: Perpindahan PI ↔ KKP, perubahan aspek dalam domain sama
 - **Clarification**: Permintaan elaborasi yang tepat sasaran
 - **Edge Cases**: Pertanyaan ambigu, out-of-domain, multi-part questions
+- **Session Persistence**: Percakapan survive server restart dan multi-server deployment
 - **Memory Window**: Pengelolaan memori percakapan dengan window 5 turn
 - **Informal Language**: Penanganan typo dan bahasa tidak formal ("gmn cara dftar kkp?")
 - **Source Detection**: Deteksi PI/KKP yang akurat berdasarkan metadata dokumen
 - **Query Expansion**: Ekspansi akronim netral tanpa bias evaluasi
+- **Database Sessions**: Session storage dengan hot cache dan automatic cleanup
 
 ### 📊 Metrik Performa
 - **Intent Classification Accuracy**: >95% untuk semua kategori
@@ -255,12 +280,12 @@ Sistem ini telah melalui serangkaian testing komprehensif untuk memastikan kuali
 
 ### 🔧 Optimisasi yang Dilakukan
 1. **Enhanced Intent Classifier**: Sistem deteksi switching yang lebih akurat
-2. **Improved Memory Management**: Session management dengan TTL + LRU eviction untuk mencegah memory leaks
+2. **Database-Backed Sessions**: Migrasi dari in-memory ke persistent session storage dengan hot LRU cache
 3. **Async Performance**: Non-blocking I/O operations untuk mencegah event loop blocking
 4. **Better Query Reformulation**: Penanganan referensi implisit yang lebih baik
 5. **Centralized Messaging**: Sistem pesan terpusat dengan HTML formatting yang konsisten
 6. **Code Quality**: Penghapusan dead code dan perbaikan dependencies untuk maintainability
-7. **Fallback Mechanisms**: Sistem fallback untuk situasi edge case
+7. **Fallback Mechanisms**: Sistem fallback untuk situasi edge case dan database downtime
 8. **Evaluation Integrity**: Penghapusan bias evaluasi dari query expansion dan reranking
 9. **Centralized Pipeline**: Single source of truth untuk retrieval operations
 10. **External Configuration**: YAML-based configuration untuk maintainability yang lebih baik
@@ -303,17 +328,27 @@ Sistem ini telah mencapai status **production-ready** dengan:
 
 **📁 Struktur File**
 ```
-src/retrieval/
-├── pipeline.py          # Centralized retrieval pipeline
-├── query_expansion.py   # Neutral acronym expansion only
-├── reranker.py         # Pure cross-encoder scoring
-└── source_utils.py     # Reliable PI/KKP detection
+src/
+├── services/
+│   ├── ai_services.py      # Main chat orchestrator dengan database sessions
+│   └── session_store.py    # Database-backed session storage dengan LRU cache
+├── retrieval/
+│   ├── pipeline.py         # Centralized retrieval pipeline
+│   ├── query_expansion.py  # Neutral acronym expansion only
+│   ├── reranker.py        # Pure cross-encoder scoring
+│   └── source_utils.py    # Reliable PI/KKP detection
 
 config/
 └── section_keywords.yaml  # External keyword configuration
 
+scripts/
+├── supabase_session_migration.sql  # Database migration untuk session storage
+├── test_session_migration.py       # Test suite untuk session storage
+└── test_chat_integration.py        # Integration test dengan chat system
+
 docs/
-└── REFACTOR_INTEGRITAS_EVALUASI.md  # Detailed refactoring documentation
+├── SESSION_MIGRATION_GUIDE.md      # Panduan lengkap session migration
+└── REFACTOR_INTEGRITAS_EVALUASI.md # Detailed refactoring documentation
 ```
 
 
@@ -330,8 +365,10 @@ Untuk pemahaman yang lebih mendalam tentang sistem ini, tersedia dokumentasi len
 - **[ADR-002: Strategi Retrieval Hierarkis Hybrid](ADR/ADR-002-Strategi-Retrieval-Hierarkis-Hybrid.md)** - Parent-child chunking dan hybrid search
 - **[ADR-003: Reranking dengan Cross-Encoder](ADR/ADR-003-Reranking-dengan-Cross-Encoder.md)** - Implementasi reranking lokal
 - **[ADR-004: Klasifikasi Intent Percakapan](ADR/ADR-004-Klasifikasi-Intent-Percakapan.md)** - Pre-processing intent classification
+- **[ADR-005: Migrasi Session Storage Database](ADR/ADR-005-Migrasi-Session-Storage-Database.md)** - Migrasi dari in-memory ke database-backed sessions
 
 ### 🔧 Dokumentasi Teknis
+- **[Session Migration Guide](docs/SESSION_MIGRATION_GUIDE.md)** - Panduan lengkap migrasi session storage
 - **[Refactor Integritas Evaluasi](docs/REFACTOR_INTEGRITAS_EVALUASI.md)** - Dokumentasi lengkap tentang penghapusan bias evaluasi
 - **[API Documentation](docs/API_DOCUMENTATION.md)** - Dokumentasi endpoint REST API
 - **[File Organization](docs/FILE_ORGANIZATION.md)** - Struktur organisasi file proyek
