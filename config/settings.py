@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     table_child_chunks: str = Field(default="child_documents")
     table_user_quotas: str = Field(default="user_quotas")
     table_chat_logs: str = Field(default="chat_logs")
+    table_conversation_sessions: str = Field(default="conversation_sessions")
 
     # Retrieval Configuration
     retrieval_top_k: int = Field(default=30, ge=5, le=100, description="Number of chunks to retrieve")
@@ -90,6 +91,7 @@ class Settings(BaseSettings):
     # Memory Management
     MAX_ACTIVE_SESSIONS: int = Field(default=1000, ge=100, le=10000)
     SESSION_CLEANUP_INTERVAL: int = Field(default=3600, ge=300, le=7200)  # seconds
+    USE_DATABASE_SESSIONS: bool = Field(default=True, description="Use database-backed sessions instead of in-memory")
 
     @field_validator("bm25_weight", "dense_weight")
     @classmethod
