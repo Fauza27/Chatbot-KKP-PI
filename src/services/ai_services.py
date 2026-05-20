@@ -1,19 +1,33 @@
 from typing import Dict, Any, Optional
 import time
-from threading import Lock
 from loguru import logger
 
 from src.generation.memory import ConversationMemory, IntentType
 from src.generation.intent_classifier import IntentClassifier, reformulate_query
 from src.generation.chain import RAGChain
+from src.services.session_store import get_session_store
 from config.settings import get_settings
 
 settings = get_settings()
 
-# In-memory session store dengan TTL & LRU eviction.
-# Key: session_id, Value: (ConversationMemory, last_access_unix_ts)
-_session_store: dict[str, tuple[ConversationMemory, float]] = {}
-_session_lock = Lock()
+# Legacy in-memory session store (fallback jika database tidak tersedia)
+_legacy_session_store: dict[str, tuple[ConversationMemory, float]] = {}
+_legacy_session_lock = None
+
+# Initialize session store berdasarkan konfigurasi
+if settings.USE_DATABASE_SESSIONS:
+    try:
+        _session_store = get_session_store()
+        logger.info("Using database-backed session storage")
+    except Exception as e:
+        logger.error(f"Failed to initialize database session store: {e}")
+        logger.warning("Falling back to in-memory session storage")
+        settings.USE_DATABASE_SESSIONS = False
+
+if not settings.USE_DATABASE_SESSIONS:
+    from threading import Lock
+    _legacy_session_lock = Lock()
+    logger.info("Using in-memory session storage")
 
 _classifier = IntentClassifier()
 _rag_chain = RAGChain()
@@ -30,53 +44,78 @@ class RetrievalError(ChatError):
 
 
 def _evict_idle_sessions(now: float) -> int:
-    """Hapus session yang idle melebihi SESSION_CLEANUP_INTERVAL detik."""
+    """Hapus session yang idle melebihi SESSION_CLEANUP_INTERVAL detik (legacy in-memory only)."""
+    if settings.USE_DATABASE_SESSIONS:
+        return 0  # Database handles cleanup
+    
     ttl = settings.SESSION_CLEANUP_INTERVAL
-    expired = [sid for sid, (_, last_ts) in _session_store.items() if now - last_ts > ttl]
+    expired = [sid for sid, (_, last_ts) in _legacy_session_store.items() if now - last_ts > ttl]
     for sid in expired:
-        _session_store.pop(sid, None)
+        _legacy_session_store.pop(sid, None)
     if expired:
         logger.info(f"Evicted {len(expired)} idle session(s)")
     return len(expired)
 
 
 def _evict_lru_if_full() -> None:
-    """Jika store sudah penuh, hapus session paling lama tidak diakses (LRU)."""
+    """Jika store sudah penuh, hapus session paling lama tidak diakses (legacy in-memory only)."""
+    if settings.USE_DATABASE_SESSIONS:
+        return  # Database handles LRU
+    
     cap = settings.MAX_ACTIVE_SESSIONS
-    if len(_session_store) <= cap:
+    if len(_legacy_session_store) <= cap:
         return
     # Sort by last_access_ts ascending; buang sampai cap.
-    overflow = len(_session_store) - cap
-    sorted_items = sorted(_session_store.items(), key=lambda kv: kv[1][1])
+    overflow = len(_legacy_session_store) - cap
+    sorted_items = sorted(_legacy_session_store.items(), key=lambda kv: kv[1][1])
     for sid, _ in sorted_items[:overflow]:
-        _session_store.pop(sid, None)
+        _legacy_session_store.pop(sid, None)
     logger.info(f"Evicted {overflow} LRU session(s) due to MAX_ACTIVE_SESSIONS cap")
 
 
 def get_or_create_memory(session_id: str) -> ConversationMemory:
-    """Get or create conversation memory for a session, dengan TTL & LRU eviction."""
+    """Get or create conversation memory for a session."""
+    if settings.USE_DATABASE_SESSIONS:
+        # Database-backed session storage
+        return _session_store.load_memory(session_id)
+    
+    # Legacy in-memory session storage
     now = time.time()
-    with _session_lock:
+    with _legacy_session_lock:
         # Lazy cleanup setiap kali ada akses; murah karena cuma scan dict di-memori.
         _evict_idle_sessions(now)
 
-        existing = _session_store.get(session_id)
+        existing = _legacy_session_store.get(session_id)
         if existing is not None:
             memory, _ = existing
-            _session_store[session_id] = (memory, now)
+            _legacy_session_store[session_id] = (memory, now)
             return memory
 
         memory = ConversationMemory(max_turns=5)
-        _session_store[session_id] = (memory, now)
+        _legacy_session_store[session_id] = (memory, now)
         _evict_lru_if_full()
         return memory
 
 
+def _save_memory_if_needed(session_id: str, memory: ConversationMemory) -> None:
+    """Save memory to persistent storage if using database sessions."""
+    if settings.USE_DATABASE_SESSIONS:
+        try:
+            _session_store.save_memory(session_id, memory)
+        except Exception as e:
+            logger.error(f"Failed to save session {session_id}: {e}")
+            # Don't fail the chat operation if save fails
+
+
 def clear_session(session_id: str) -> bool:
     """Clear conversation memory for a session"""
-    with _session_lock:
-        if session_id in _session_store:
-            del _session_store[session_id]
+    if settings.USE_DATABASE_SESSIONS:
+        return _session_store.delete_session(session_id)
+    
+    # Legacy in-memory
+    with _legacy_session_lock:
+        if session_id in _legacy_session_store:
+            del _legacy_session_store[session_id]
             logger.info(f"Session {session_id} cleared")
             return True
     return False
@@ -84,12 +123,27 @@ def clear_session(session_id: str) -> bool:
 
 def get_session_stats() -> Dict[str, Any]:
     """Get statistics about active sessions"""
-    with _session_lock:
+    if settings.USE_DATABASE_SESSIONS:
+        return _session_store.get_session_stats()
+    
+    # Legacy in-memory
+    with _legacy_session_lock:
         return {
-            "active_sessions": len(_session_store),
-            "total_turns": sum(m.turn_count for m, _ in _session_store.values()),
-            "sessions": list(_session_store.keys()),
+            "active_sessions": len(_legacy_session_store),
+            "total_turns": sum(m.turn_count for m, _ in _legacy_session_store.values()),
+            "sessions": list(_legacy_session_store.keys()),
         }
+
+
+def cleanup_sessions() -> int:
+    """Manually trigger session cleanup. Returns number of sessions cleaned."""
+    if settings.USE_DATABASE_SESSIONS:
+        return _session_store.cleanup_idle_sessions()
+    
+    # Legacy in-memory
+    now = time.time()
+    with _legacy_session_lock:
+        return _evict_idle_sessions(now)
 
 
 def chat(query: str, session_id: str) -> Dict[str, Any]:
@@ -121,6 +175,10 @@ def chat(query: str, session_id: str) -> Dict[str, Any]:
             )
             answer = result["answer"]
             memory.add_assistant_turn(content=answer)
+            
+            # Save to persistent storage
+            _save_memory_if_needed(session_id, memory)
+            
             return {
                 "answer": answer,
                 "num_docs": 0,
@@ -147,6 +205,9 @@ def chat(query: str, session_id: str) -> Dict[str, Any]:
                 )
             else:
                 memory.add_assistant_turn(content=answer)
+
+            # Save to persistent storage
+            _save_memory_if_needed(session_id, memory)
 
             return {
                 "answer": answer,
@@ -202,6 +263,10 @@ def _handle_retrieval(
             "Silakan konsultasikan langsung dengan Dosen Pembimbing atau Program Studi Anda."
         )
         memory.add_assistant_turn(content=answer)
+        
+        # Save to persistent storage
+        _save_memory_if_needed(session_id, memory)
+        
         return {
             "answer": answer,
             "num_docs": 0,
@@ -226,6 +291,9 @@ def _handle_retrieval(
         content=answer,
         retrieved_doc_contents=[p["content"] for p in reranked_parents],
     )
+
+    # Save to persistent storage
+    _save_memory_if_needed(session_id, memory)
 
     return {
         "answer": answer,

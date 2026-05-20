@@ -119,6 +119,34 @@ class ConversationMemory:
     def reset(self) -> None:
         self._turns = []
 
+    def to_dict(self) -> list[dict]:
+        """Convert turns to dictionary format for JSONB storage."""
+        return [
+            {
+                "role": turn.role,
+                "content": turn.content,
+                "intent": turn.intent.value if turn.intent else None,
+                "retrieved_doc_contents": turn.retrieved_doc_contents,
+                "timestamp": turn.timestamp
+            }
+            for turn in self._turns
+        ]
+
+    @classmethod
+    def from_dict(cls, turns_data: list[dict], max_turns: int = 5) -> "ConversationMemory":
+        """Reconstruct ConversationMemory from dictionary data."""
+        memory = cls(max_turns=max_turns)
+        for turn_data in turns_data:
+            turn = Turn(
+                role=turn_data["role"],
+                content=turn_data["content"],
+                intent=IntentType(turn_data["intent"]) if turn_data.get("intent") else None,
+                retrieved_doc_contents=turn_data.get("retrieved_doc_contents", []),
+                timestamp=turn_data.get("timestamp", time.time())
+            )
+            memory._turns.append(turn)
+        return memory
+
     def __repr__(self) -> str:
         return (
             f"ConversationMemory("
